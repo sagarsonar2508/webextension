@@ -1,0 +1,40 @@
+{
+  "name": "whatsapp-quick-replies",
+  "displayName": "WhatsApp Quick Replies - CRM for Small Business",
+  "version": "1.0.0",
+  "description": "Quick reply templates, slash commands, and CRM features for WhatsApp Web",
+  "author": "Your Name",
+  "scripts": {
+    "dev": "plasmo dev",
+    "build": "plasmo build",
+    "package": "plasmo package"
+  },
+  "dependencies": {
+    "@parcel/watcher-win32-x64": "^2.5.6",
+    "lucide-react": "^0.453.0",
+    "plasmo": "^0.89.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "sharp": "^0.34.5",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@types/node": "^20.11.30",
+    "@types/react": "^18.2.67",
+    "@types/react-dom": "^18.2.22",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "typescript": "^5.4.3"
+  },
+  "manifest": {
+    "host_permissions": [
+      "https://web.whatsapp.com/*"
+    ],
+    "permissions": [
+      "storage",
+      "contextMenus"
+    ]
+  }
+}
