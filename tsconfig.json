@@ -1,7 +1,7 @@
 {
   "extends": "plasmo/templates/tsconfig.base",
   "compilerOptions": {
-    "baseUrl": ".",
+    "moduleResolution": "bundler",
     "paths": {
       "~/*": [
         "./src/*"
@@ -9,7 +9,8 @@
     },
     "strict": true,
     "noImplicitAny": true,
-    "strictNullChecks": true
+    "strictNullChecks": true,
+    "types": ["chrome", "node"]
   },
   "include": [
     ".plasmo/index.d.ts",

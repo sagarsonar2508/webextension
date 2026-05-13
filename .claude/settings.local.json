@@ -6,7 +6,30 @@
       "Bash(node scripts/generate-icons.js:*)",
       "Bash(taskkill:*)",
       "Bash(cmd /c \"rd /s /q D:\\\\Sagar\\\\WebWha\\\\.plasmo\")",
-      "PowerShell(npx plasmo dev --verbose)"
+      "PowerShell(npx plasmo dev --verbose)",
+      "PowerShell(try { Rename-Item -Path \"D:\\\\Sagar\\\\WebWha\\\\.plasmo\" -NewName \".plasmo.locked.$\\(Get-Random\\)\" -ErrorAction Stop; Write-Output \"RENAMED OK\" } catch { Write-Output \"RENAME FAILED: $\\($_.Exception.Message\\)\" })",
+      "Bash(npx plasmo *)",
+      "Bash(node -e \"const fs=require\\('fs'\\);const c=fs.readFileSync\\('node_modules/plasmo/dist/index.js','utf8'\\);const lines=c.split\\('\\\\n'\\);[25,111,173].forEach\\(n=>{const l=lines[n-1]||'';const i=l.search\\(/cache.?\\(dir|path|location\\)|PARCEL_CACHE|PLASMO_CACHE/i\\);if\\(i>=0\\)console.log\\('L'+n+': ...'+l.substring\\(Math.max\\(0,i-80\\),Math.min\\(l.length,i+200\\)\\)+'...'\\);}\\);\")",
+      "Bash(node -e \"const c=require\\('fs'\\).readFileSync\\('node_modules/plasmo/dist/index.js','utf8'\\);let i=0;let n=0;while\\(\\(i=c.indexOf\\('\\\\\".plasmo\\\\\"',i+1\\)\\)!==-1&&n<5\\){console.log\\('@'+i+': '+c.substring\\(Math.max\\(0,i-150\\),Math.min\\(c.length,i+150\\)\\).replace\\(/\\\\n/g,' '\\)\\);console.log\\('---'\\);n++;}\")",
+      "Bash(ls build *)",
+      "Bash(ls .plasmo)",
+      "Bash(ls dist *)",
+      "Bash(ls build/chrome-mv3-prod 2>nul)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "PowerShell(npx tsc --noEmit 2>&1)",
+      "Bash(node -e \"const s=require\\('fs'\\).readFileSync\\('src/contents/whatsapp.tsx','utf8'\\); const i=s.indexOf\\('replace\\(/['\\); const slice=s.slice\\(i, i+50\\); for \\(const c of slice\\) console.log\\(c, c.charCodeAt\\(0\\).toString\\(16\\)\\);\")",
+      "Bash(node tmp_patch.js)",
+      "Bash(grep -n \"DEADBLOCK_REMOVE_ME\\\\|finalText: finalText\\\\|finalText\\\\$\\\\|existing: existing.length\\\\|incrementUsageCount\" \"d:/Sagar/WebWha/src/contents/whatsapp.tsx\")",
+      "PowerShell($path = \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\"; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.Encoding]::UTF8\\); $kept = $lines[0..334] + $lines[374..\\($lines.Length - 1\\)]; [System.IO.File]::WriteAllLines\\($path, $kept, \\(New-Object System.Text.UTF8Encoding $false\\)\\))",
+      "PowerShell($path = \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\"; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.Encoding]::UTF8\\); for \\($i = 282; $i -lt 320; $i++\\) { \"{0,4}: {1}\" -f \\($i + 1\\), $lines[$i] })",
+      "PowerShell($path = \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\"; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.Encoding]::UTF8\\); $kept = $lines[0..286] + $lines[288..289] + $lines[291..311] + @\\('      const existing = \\(input.textContent || \"\"\\).replace\\('\\) + $lines[312..\\($lines.Length - 1\\)]; [System.IO.File]::WriteAllLines\\($path, $kept, \\(New-Object System.Text.UTF8Encoding $false\\)\\))",
+      "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1)",
+      "PowerShell(npx tsc --noEmit; \"exit=$LASTEXITCODE\")",
+      "PowerShell(npm run build 2>&1)"
+    ],
+    "additionalDirectories": [
+      "d:\\Sagar\\WebWha"
     ]
   }
 }
