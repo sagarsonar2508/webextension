@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react"
-import { Plus, Edit2, Trash2, Sparkles, Power } from "lucide-react"
+import { Plus, Edit2, Trash2, Sparkles, Power, Zap } from "lucide-react"
 import type { AutoReplyRule, AutoReplySettings, Trigger } from "~/types"
 import {
   getRules,
@@ -188,9 +188,18 @@ function RuleCard({
       }`}>
       <div className="flex items-start justify-between mb-2">
         <div className="flex-1 min-w-0">
-          <h3 className="font-medium text-sm text-gray-900 truncate">
-            {rule.name}
-          </h3>
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-medium text-sm text-gray-900 truncate">
+              {rule.name}
+            </h3>
+            {rule.mode === "auto" && (
+              <span
+                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-whatsapp-primary/10 text-whatsapp-primary border border-whatsapp-primary/30"
+                title="Sends automatically without asking">
+                <Zap size={10} /> Auto-send
+              </span>
+            )}
+          </div>
           <p className="text-xs text-gray-500 mt-0.5">
             {triggerSummary(rule.trigger)}
           </p>

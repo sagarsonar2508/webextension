@@ -20,6 +20,7 @@ import {
   getContactName,
   insertTextIntoInput,
   detectSlashCommand,
+  sendCurrentMessage,
   SELECTORS
 } from "~/utils/whatsapp-dom"
 import { processTemplate, getVariableContext } from "~/utils/variables"
@@ -628,12 +629,22 @@ function AutoReplySuggestion() {
   }, [suggestion, contactName, dismiss])
 
   useEffect(() => {
+    const LOG = "[WQR/handler]"
     const handleIncoming = async (msg: IncomingMessage) => {
       const [rules, settings, state] = await Promise.all([
         getRules(),
         getAutoReplySettings(),
         getConversationState(msg.contactId)
       ])
+      console.log(`${LOG} incoming`, {
+        text: msg.text.slice(0, 80),
+        contact: msg.contactName,
+        rules: rules.length,
+        enabled: rules.filter((r) => r.enabled).length,
+        master: settings.masterEnabled,
+        mode: settings.globalMode,
+        hasState: !!state
+      })
 
       const result = matchRule({
         message: msg,
@@ -644,6 +655,22 @@ function AutoReplySuggestion() {
       })
 
       if (!result) return
+
+      if (result.rule.mode === "auto") {
+        const inserted = insertTextIntoInput(result.rendered)
+        console.log(`${LOG} auto-send: insert`, { ok: inserted })
+        if (!inserted) return
+        setTimeout(() => {
+          const sent = sendCurrentMessage()
+          console.log(`${LOG} auto-send: send`, { ok: sent })
+          if (!sent) return
+          recordReply(msg.contactId, result.rule.id).catch(() => {})
+          recordTriggered(result.rule.id).catch(() => {})
+        }, 250)
+        return
+      }
+
+      console.log(`${LOG} suggest banner shown`, { rule: result.rule.name })
 
       // Replace any in-flight suggestion (don't stack banners). Reset the
       // 30s auto-dismiss timer for the new one.
@@ -657,9 +684,60 @@ function AutoReplySuggestion() {
     }
 
     const stop = startIncomingMessageObserver(handleIncoming)
+
+    // Console helper for manual testing. Find the last incoming bubble in
+    // the open chat, parse it, and re-run the engine — bypasses the seen-set
+    // so a user can verify their rules without needing a fresh message to
+    // arrive. Call `__wqrTest()` in DevTools.
+    const findLastIncomingBubble = (): HTMLElement | null => {
+      const bubbles = Array.from(
+        document.querySelectorAll<HTMLElement>("#main [data-id]")
+      ).reverse()
+      for (const b of bubbles) {
+        const id = b.getAttribute("data-id") || ""
+        if (id.startsWith("false_")) return b
+        if (
+          !id.startsWith("true_") &&
+          b.closest('[class*="message-in"]')
+        ) {
+          return b
+        }
+      }
+      return null
+    }
+
+    ;(window as unknown as { __wqrTest: () => void }).__wqrTest = () => {
+      const bubble = findLastIncomingBubble()
+      if (!bubble) {
+        console.log("[WQR auto-reply] __wqrTest: no incoming bubble found in #main")
+        return
+      }
+      const id = bubble.getAttribute("data-id") || ""
+      const sel = bubble.querySelector<HTMLElement>(".selectable-text")
+      const text = (
+        sel?.innerText ||
+        bubble.querySelector<HTMLElement>(".copyable-text")?.textContent ||
+        ""
+      ).trim()
+      const contact = getContactName() || "there"
+      console.log("[WQR auto-reply] __wqrTest: replaying", { id, text, contact })
+      if (!text) {
+        console.log("[WQR auto-reply] __wqrTest: bubble has no text, aborting")
+        return
+      }
+      handleIncoming({
+        id: `__test_${Date.now()}`,
+        contactId: contact,
+        contactName: contact,
+        text,
+        timestamp: Date.now()
+      })
+    }
+
     return () => {
       stop()
       if (dismissTimer.current) clearTimeout(dismissTimer.current)
+      delete (window as unknown as { __wqrTest?: () => void }).__wqrTest
     }
   }, [])
 

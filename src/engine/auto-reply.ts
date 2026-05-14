@@ -31,26 +31,66 @@ export interface MatchResult {
   rendered: string          // response text after variable processing
 }
 
+const LOG = "[WQR/engine]"
+
 // Returns the highest-priority rule whose trigger matches and whose guards
 // (scope, rate limit, master switch) all pass. Pure function — no I/O.
 export function matchRule(input: MatchInput): MatchResult | null {
   const { message, rules, state, settings, now } = input
+  const enabledCount = rules.filter((r) => r.enabled).length
 
-  if (!settings.masterEnabled || settings.globalMode === "off") return null
+  if (!settings.masterEnabled || settings.globalMode === "off") {
+    console.log(`${LOG} blocked: settings off`, {
+      masterEnabled: settings.masterEnabled,
+      globalMode: settings.globalMode
+    })
+    return null
+  }
+
+  if (enabledCount === 0) {
+    console.log(`${LOG} blocked: no enabled rules`, { total: rules.length })
+    return null
+  }
 
   const sorted = [...rules]
     .filter((r) => r.enabled)
     .sort((a, b) => a.priority - b.priority || a.createdAt - b.createdAt)
 
+  const checks: Array<{
+    rule: string
+    trigger: string
+    trigOK: boolean
+    scopeOK: boolean
+    rateOK: boolean
+  }> = []
+
   for (const rule of sorted) {
-    if (!triggerMatches(rule.trigger, message, state)) continue
-    if (!scopeAllows(rule.scope, message.contactName)) continue
-    if (!rateLimitAllows(rule.rateLimit, state, rule.id, now)) continue
+    const trigOK = triggerMatches(rule.trigger, message, state)
+    const scopeOK = trigOK && scopeAllows(rule.scope, message.contactName)
+    const rateOK = scopeOK && rateLimitAllows(rule.rateLimit, state, rule.id, now)
+    checks.push({
+      rule: rule.name,
+      trigger: rule.trigger.kind,
+      trigOK,
+      scopeOK,
+      rateOK
+    })
+    if (!trigOK || !scopeOK || !rateOK) continue
 
     const rendered = renderResponse(rule.response, message.contactName)
+    console.log(`${LOG} match`, {
+      rule: rule.name,
+      mode: rule.mode,
+      rendered: rendered.slice(0, 80)
+    })
     return { rule, rendered }
   }
 
+  console.log(`${LOG} no match`, {
+    text: message.text.slice(0, 60),
+    enabled: enabledCount,
+    checks
+  })
   return null
 }
 

@@ -38,16 +38,25 @@ export function getMessageInput(): HTMLElement | null {
   )
 }
 
+// Strings WhatsApp renders inside `header span[title]` that aren't real
+// contact names — tooltip placeholders, status-bar copy etc. Treat as empty
+// so we don't store conversation state under "click here for contact info".
+const HEADER_PLACEHOLDERS = [
+  "click here for contact info",
+  "click here for group info"
+]
+
 // Get the current contact name
 export function getContactName(): string {
-  const nameElement =
-    document.querySelector<HTMLElement>(SELECTORS.contactName) ||
-    document.querySelector<HTMLElement>(SELECTORS.contactNameFallback)
-
-  if (nameElement) {
-    return nameElement.getAttribute("title") || nameElement.innerText || ""
+  const candidates = document.querySelectorAll<HTMLElement>(
+    `${SELECTORS.contactName}, ${SELECTORS.contactNameFallback}`
+  )
+  for (const el of Array.from(candidates)) {
+    const raw = (el.getAttribute("title") || el.innerText || "").trim()
+    if (!raw) continue
+    if (HEADER_PLACEHOLDERS.includes(raw.toLowerCase())) continue
+    return raw
   }
-
   return ""
 }
 
@@ -111,6 +120,27 @@ export function replaceInputContent(text: string): boolean {
 export function getCurrentInputText(): string {
   const input = getMessageInput()
   return input?.textContent || ""
+}
+
+// Click WhatsApp's Send button. Used by auto-send rules — keystroke-based
+// Enter dispatch is unreliable in WhatsApp's Lexical editor (the same path
+// that swallowed `delete` calls in replaceShortcut), so we click the real
+// button instead.
+export function sendCurrentMessage(): boolean {
+  const primary = document.querySelector<HTMLElement>(SELECTORS.sendButton)
+  const fallback = document.querySelector<HTMLElement>(SELECTORS.sendButtonFallback)
+  const btn = primary || fallback
+  if (!btn) {
+    console.log("[WQR/dom] send button not found", {
+      primary: SELECTORS.sendButton,
+      fallback: SELECTORS.sendButtonFallback
+    })
+    return false
+  }
+  // For [data-icon="send"] we get the SVG/icon, so walk up to the clickable button.
+  const clickable = btn.closest("button") || btn
+  ;(clickable as HTMLElement).click()
+  return true
 }
 
 // Check if we're in a chat

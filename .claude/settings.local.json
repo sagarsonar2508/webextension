@@ -26,7 +26,9 @@
       "PowerShell($path = \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\"; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.Encoding]::UTF8\\); $kept = $lines[0..286] + $lines[288..289] + $lines[291..311] + @\\('      const existing = \\(input.textContent || \"\"\\).replace\\('\\) + $lines[312..\\($lines.Length - 1\\)]; [System.IO.File]::WriteAllLines\\($path, $kept, \\(New-Object System.Text.UTF8Encoding $false\\)\\))",
       "PowerShell(npx tsc --noEmit -p tsconfig.json 2>&1)",
       "PowerShell(npx tsc --noEmit; \"exit=$LASTEXITCODE\")",
-      "PowerShell(npm run build 2>&1)"
+      "PowerShell(npm run build 2>&1)",
+      "Bash(stat -c '%y %n' \"d:\\\\Sagar\\\\WebWha\\\\build\\\\chrome-mv3-prod\\\\whatsapp.9c0e2dd3.js\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\utils\\\\whatsapp-incoming.ts\" 2>/dev/null || ls -la \"d:\\\\Sagar\\\\WebWha\\\\build\\\\chrome-mv3-prod\\\\whatsapp.9c0e2dd3.js\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\utils\\\\whatsapp-incoming.ts\")",
+      "Read(//d/Sagar/WebWha/**)"
     ],
     "additionalDirectories": [
       "d:\\Sagar\\WebWha"

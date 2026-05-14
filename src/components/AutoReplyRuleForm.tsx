@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { X, Info } from "lucide-react"
-import type { AutoReplyRule, KeywordMatch, ContactScope } from "~/types"
+import type { AutoReplyRule, KeywordMatch, ContactScope, ReplyMode } from "~/types"
 import { AVAILABLE_VARIABLES, validateVariables } from "~/utils/variables"
 
 type TriggerKind = "keyword" | "first-message" | "any-message"
@@ -34,6 +34,8 @@ export function AutoReplyRuleForm({
   const [maxPerDay, setMaxPerDay] = useState(1)
   const [cooldownMin, setCooldownMin] = useState(30)
 
+  const [mode, setMode] = useState<ReplyMode>("suggest")
+
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [showVariables, setShowVariables] = useState(false)
 
@@ -53,6 +55,7 @@ export function AutoReplyRuleForm({
     }
     setMaxPerDay(rule.rateLimit.maxPerContactPerDay)
     setCooldownMin(rule.rateLimit.cooldownMinutes)
+    setMode(rule.mode ?? "suggest")
   }, [rule])
 
   const validate = (): boolean => {
@@ -108,7 +111,7 @@ export function AutoReplyRuleForm({
       response: { kind: "text", content: content.trim() },
       scope,
       rateLimit: { maxPerContactPerDay: maxPerDay, cooldownMinutes: cooldownMin },
-      mode: "suggest"
+      mode
     })
   }
 
@@ -251,6 +254,47 @@ export function AutoReplyRuleForm({
                 className={`${inputCls(!!errors.content)} resize-none`}
               />
             </Field>
+          </Section>
+
+          {/* Send mode */}
+          <Section title="Send mode">
+            <div className="space-y-2">
+              <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="radio"
+                  name="mode"
+                  checked={mode === "suggest"}
+                  onChange={() => setMode("suggest")}
+                  className="mt-0.5"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    Suggest a reply
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Show a banner with the reply — you click Insert to send.
+                  </p>
+                </div>
+              </label>
+              <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                <input
+                  type="radio"
+                  name="mode"
+                  checked={mode === "auto"}
+                  onChange={() => setMode("auto")}
+                  className="mt-0.5"
+                />
+                <div>
+                  <p className="text-sm font-medium text-gray-900">
+                    Auto-send instantly
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    Sends the reply without asking. Only works while the chat is
+                    open in WhatsApp Web.
+                  </p>
+                </div>
+              </label>
+            </div>
           </Section>
 
           {/* Rate limit */}
