@@ -24,3 +24,5 @@ npm-debug.log*
 
 # Keys
 *.pem
+
+package-lock.json
