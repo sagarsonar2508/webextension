@@ -12,7 +12,6 @@ export interface AutoReplyRule {
   response: Response
 
   scope: ContactScope
-  rateLimit: RateLimit
   mode: ReplyMode           // per-rule; clamped by global mode in settings
 
   stats: { triggered: number; lastTriggeredAt?: number }
@@ -34,11 +33,6 @@ export type ContactScope =
   | { kind: "all" }
   | { kind: "include"; contactNames: string[] }   // case-insensitive substring match
   | { kind: "exclude"; contactNames: string[] }
-
-export interface RateLimit {
-  maxPerContactPerDay: number   // 0 = unlimited
-  cooldownMinutes: number       // 0 = no cooldown
-}
 
 // v1 only ships "suggest". "auto" reserved for v2 (with humanizing typing delay).
 export type ReplyMode = "suggest" | "auto"

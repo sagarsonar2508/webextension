@@ -18,23 +18,26 @@ import {
 import {
   getMessageInput,
   getContactName,
+  getCurrentInputText,
   insertTextIntoInput,
+  setMessageInputText,
   detectSlashCommand,
   sendCurrentMessage,
   SELECTORS
 } from "~/utils/whatsapp-dom"
 import { processTemplate, getVariableContext } from "~/utils/variables"
-import { startIncomingMessageObserver } from "~/utils/whatsapp-incoming"
-import { matchRule, type IncomingMessage, type MatchResult } from "~/engine/auto-reply"
+import {
+  startIncomingMessageObserver,
+  isLastMessageIncoming
+} from "~/utils/whatsapp-incoming"
+import { matchRules, type IncomingMessage, type MatchResult } from "~/engine/auto-reply"
 import {
   getRules,
   getAutoReplySettings,
   getConversationState,
   recordReply,
-  recordTriggered,
-  markContactSeen
+  recordTriggered
 } from "~/storage/auto-reply"
-import { Sparkles } from "lucide-react"
 
 import "~/styles/globals.css"
 
@@ -586,67 +589,187 @@ function KeyboardShortcuts() {
   return null
 }
 
-// Auto-reply suggestion banner.
+// Auto-reply driver.
 //
-// Subscribes to incoming-message events from the observer. For each message,
-// pulls rules + per-contact state + global settings from chrome.storage and
-// runs the engine. A match opens a small floating card above the WhatsApp
-// input — never auto-sends, never overwrites what the user is typing. The
-// user explicitly clicks Insert to drop the suggestion into the message box,
-// or Dismiss to hide it.
+// Subscribes to incoming-message events from the observer and runs the engine.
+//   - Auto-send rules:  insert the reply and click send.
+//   - Suggest rules:    insert the reply straight into the message box but do
+//                       NOT send — the user reviews it and presses send.
+// Renders nothing; it only hosts the observer.
 //
-// Why a banner and not a draft pre-fill: pre-filling clobbers in-progress
-// typing and is hard to undo. A banner is opt-in by click, so the worst case
-// is "ignored" rather than "deleted my draft".
+// Message ids already auto-replied to. Module scope (not effect/component
+// scope) on purpose: the dedup must survive a React remount or any duplicate
+// observer instance, so a single customer message can never be answered more
+// than once no matter how many code paths surface it.
+const autoRepliedMsgIds = new Set<string>()
+
+// Message ids whose suggested reply has already been inserted into the box —
+// stops a suggest rule re-inserting on every observer event for one message.
+const suggestInsertedIds = new Set<string>()
+
+// ── Loop guard ────────────────────────────────────────────────────────────
+// An auto-reply whose text also matches a trigger keyword (e.g. a rule named
+// "Hi" that replies "Hi") would re-fire on its own outgoing message — the
+// extension can't always tell its own sent message from an incoming one. We
+// remember every text we auto-send; for a short window after, an identical
+// incoming text is treated as our own echo and ignored. Keyed on text only
+// (not contact) because the chat header name/number is not always stable.
+const SELF_ECHO_WINDOW = 15_000   // ms
+const recentSentReplies: Array<{ text: string; at: number }> = []
+
+// Zero-width chars WhatsApp's editor pads text with — stripped before compare.
+const ZERO_WIDTH = new RegExp("[\\u200B\\u200C\\u200D\\uFEFF]", "g")
+
+const normalizeMsg = (s: string): string =>
+  s.replace(ZERO_WIDTH, "").trim().toLowerCase().replace(/\s+/g, " ")
+
+const recordSentReply = (text: string): void => {
+  recentSentReplies.push({ text: normalizeMsg(text), at: Date.now() })
+}
+
+// True if this incoming text looks like one of our own recent auto-replies
+// echoed back. Also prunes expired entries.
+const isOwnRecentReply = (text: string): boolean => {
+  const now = Date.now()
+  for (let i = recentSentReplies.length - 1; i >= 0; i--) {
+    if (now - recentSentReplies[i].at > SELF_ECHO_WINDOW) {
+      recentSentReplies.splice(i, 1)
+    }
+  }
+  const norm = normalizeMsg(text)
+  return recentSentReplies.some((r) => r.text === norm)
+}
+
 function AutoReplySuggestion() {
-  const [suggestion, setSuggestion] = useState<MatchResult | null>(null)
-  const [contactName, setContactName] = useState("")
-  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const dismiss = useCallback((markSeen: boolean) => {
-    if (dismissTimer.current) {
-      clearTimeout(dismissTimer.current)
-      dismissTimer.current = null
-    }
-    setSuggestion((prev) => {
-      // Mark this contact as "seen" so first-message trigger doesn't re-fire
-      // every time they message again, even if we never inserted a reply.
-      if (markSeen && prev) {
-        markContactSeen(contactName).catch(() => {})
-      }
-      return null
-    })
-  }, [contactName])
-
-  const handleInsert = useCallback(async () => {
-    if (!suggestion) return
-    const ok = insertTextIntoInput(suggestion.rendered)
-    if (ok) {
-      await recordReply(contactName, suggestion.rule.id)
-      await recordTriggered(suggestion.rule.id)
-    }
-    dismiss(false)
-  }, [suggestion, contactName, dismiss])
-
   useEffect(() => {
-    const LOG = "[WQR/handler]"
+    const LOG = "[AR]"
+
+    // Number of auto-send batches currently in flight. While this is > 0 a
+    // suggest insert is queued instead of run — the suggestion must never sit
+    // in the box when auto-send clicks send, or it gets sent by mistake.
+    let autoSendInFlight = 0
+    const pendingSuggestions: Array<{
+      msg: IncomingMessage
+      suggest: MatchResult
+    }> = []
+
+    // Actually write a suggestion into the box (no send). Deduped per message.
+    const insertSuggestionNow = (
+      msg: IncomingMessage,
+      suggest: MatchResult
+    ) => {
+      if (suggestInsertedIds.has(msg.id)) {
+        console.log(`${LOG} suggest skipped: already inserted (id=${msg.id})`)
+        return
+      }
+      // If the box already holds this exact suggestion — e.g. WhatsApp
+      // restored it as a draft after a page reload — don't insert it again
+      // (that was appending a second copy onto the old draft).
+      if (normalizeMsg(getCurrentInputText()) === normalizeMsg(suggest.rendered)) {
+        console.log(`${LOG} suggest skipped: already in the box`)
+        suggestInsertedIds.add(msg.id)
+        return
+      }
+      suggestInsertedIds.add(msg.id)
+      if (suggestInsertedIds.size > 2000) {
+        const recent = Array.from(suggestInsertedIds).slice(-1000)
+        suggestInsertedIds.clear()
+        recent.forEach((id) => suggestInsertedIds.add(id))
+      }
+      const inserted = setMessageInputText(suggest.rendered)
+      console.log(
+        `${LOG} suggest insert "${suggest.rule.name}": ${inserted ? "ok" : "FAIL"}`
+      )
+      if (inserted) {
+        recordReply(msg.contactId, suggest.rule.id).catch(() => {})
+        recordTriggered(suggest.rule.id).catch(() => {})
+      }
+    }
+
+    const flushPendingSuggestions = () => {
+      while (pendingSuggestions.length > 0) {
+        const p = pendingSuggestions.shift()
+        if (p) insertSuggestionNow(p.msg, p.suggest)
+      }
+    }
+
+    // Insert a suggest reply for the user to review. If any auto-send batch is
+    // running the insert is QUEUED and flushed once auto-send is fully idle —
+    // that guarantees the suggestion can never be in the box at send time.
+    const insertSuggestion = (
+      msg: IncomingMessage,
+      suggest: MatchResult | null
+    ) => {
+      if (!suggest) return
+      if (autoSendInFlight > 0) {
+        console.log(`${LOG} suggest queued (auto-send busy): "${suggest.rule.name}"`)
+        pendingSuggestions.push({ msg, suggest })
+        return
+      }
+      insertSuggestionNow(msg, suggest)
+    }
+
+    // Send one message per matching auto rule, sequentially with a gap so
+    // WhatsApp's editor and send button keep up. The last-message guard and
+    // dedup are checked once before the batch — within the batch every
+    // matched rule sends exactly one message.
+    const sendAutoReplies = (matches: MatchResult[], msg: IncomingMessage) => {
+      autoSendInFlight++
+      let i = 0
+      const sendNext = () => {
+        if (i >= matches.length) {
+          console.log(`${LOG} auto-send: done (${matches.length} message(s))`)
+          // Batch finished — release the lock and, if nothing else is
+          // sending, drain any suggestions that were queued meanwhile.
+          autoSendInFlight = Math.max(0, autoSendInFlight - 1)
+          if (autoSendInFlight === 0) flushPendingSuggestions()
+          return
+        }
+        const m = matches[i]
+        const n = ++i
+        // Clear-then-insert so the message is exactly m.rendered — never
+        // appended onto leftover text (the cause of the "Hi Hi Hi Hi" loop).
+        const inserted = setMessageInputText(m.rendered)
+        console.log(
+          `${LOG} send ${n}/${matches.length} "${m.rule.name}": insert ${inserted ? "ok" : "FAIL"}`
+        )
+        if (!inserted) {
+          setTimeout(sendNext, 200)
+          return
+        }
+        // Record before the actual send so the loop guard is armed before
+        // our own message can echo back through the observer.
+        recordSentReply(m.rendered)
+        setTimeout(() => {
+          const sent = sendCurrentMessage()
+          console.log(`${LOG} send ${n}/${matches.length}: ${sent ? "ok" : "FAIL"}`)
+          if (sent) {
+            recordReply(msg.contactId, m.rule.id).catch(() => {})
+            recordTriggered(m.rule.id).catch(() => {})
+          }
+          setTimeout(sendNext, 900)
+        }, 250)
+      }
+      sendNext()
+    }
+
     const handleIncoming = async (msg: IncomingMessage) => {
+      // Loop guard: if this matches a text we just auto-sent to this contact,
+      // it's our own message echoed back — ignore it entirely.
+      if (isOwnRecentReply(msg.text)) {
+        console.log(
+          `${LOG} skip: own auto-reply echoed back ("${msg.text.slice(0, 40)}")`
+        )
+        return
+      }
+
       const [rules, settings, state] = await Promise.all([
         getRules(),
         getAutoReplySettings(),
         getConversationState(msg.contactId)
       ])
-      console.log(`${LOG} incoming`, {
-        text: msg.text.slice(0, 80),
-        contact: msg.contactName,
-        rules: rules.length,
-        enabled: rules.filter((r) => r.enabled).length,
-        master: settings.masterEnabled,
-        mode: settings.globalMode,
-        hasState: !!state
-      })
 
-      const result = matchRule({
+      const { auto, suggest } = matchRules({
         message: msg,
         rules,
         state,
@@ -654,33 +777,39 @@ function AutoReplySuggestion() {
         now: Date.now()
       })
 
-      if (!result) return
+      console.log(
+        `${LOG} incoming: "${msg.text.slice(0, 60)}" id=${msg.id} from "${msg.contactName}" | autoMatches=${auto.length} suggest=${suggest ? suggest.rule.name : "none"}`
+      )
 
-      if (result.rule.mode === "auto") {
-        const inserted = insertTextIntoInput(result.rendered)
-        console.log(`${LOG} auto-send: insert`, { ok: inserted })
-        if (!inserted) return
-        setTimeout(() => {
-          const sent = sendCurrentMessage()
-          console.log(`${LOG} auto-send: send`, { ok: sent })
-          if (!sent) return
-          recordReply(msg.contactId, result.rule.id).catch(() => {})
-          recordTriggered(result.rule.id).catch(() => {})
-        }, 250)
-        return
+      // ── Auto-send ────────────────────────────────────────────────────
+      // Guards, checked once: (1) the newest message in the chat must be from
+      // the customer; (2) never reply to the same message twice. Starting a
+      // batch raises autoSendInFlight, which makes the suggest insert below
+      // queue itself instead of running mid-send.
+      if (auto.length > 0) {
+        if (!isLastMessageIncoming()) {
+          console.log(`${LOG} auto-send skipped: last message is not from customer`)
+        } else if (autoRepliedMsgIds.has(msg.id)) {
+          console.log(`${LOG} auto-send skipped: already replied (id=${msg.id})`)
+        } else {
+          autoRepliedMsgIds.add(msg.id)
+          if (autoRepliedMsgIds.size > 2000) {
+            const recent = Array.from(autoRepliedMsgIds).slice(-1000)
+            autoRepliedMsgIds.clear()
+            recent.forEach((id) => autoRepliedMsgIds.add(id))
+          }
+          console.log(
+            `${LOG} auto-send: ${auto.length} rule(s) → ${auto.map((m) => m.rule.name).join(", ")}`
+          )
+          sendAutoReplies(auto, msg)
+        }
       }
 
-      console.log(`${LOG} suggest banner shown`, { rule: result.rule.name })
-
-      // Replace any in-flight suggestion (don't stack banners). Reset the
-      // 30s auto-dismiss timer for the new one.
-      if (dismissTimer.current) clearTimeout(dismissTimer.current)
-      setContactName(msg.contactName)
-      setSuggestion(result)
-      dismissTimer.current = setTimeout(() => {
-        markContactSeen(msg.contactId).catch(() => {})
-        setSuggestion(null)
-      }, 30_000)
+      // ── Suggest ──────────────────────────────────────────────────────
+      // Inserts the reply into the box for the user to review. insertSuggestion
+      // queues itself while any auto-send batch is in flight, so the suggest
+      // text can never be sitting in the box when auto-send clicks send.
+      insertSuggestion(msg, suggest)
     }
 
     const stop = startIncomingMessageObserver(handleIncoming)
@@ -736,41 +865,12 @@ function AutoReplySuggestion() {
 
     return () => {
       stop()
-      if (dismissTimer.current) clearTimeout(dismissTimer.current)
       delete (window as unknown as { __wqrTest?: () => void }).__wqrTest
     }
   }, [])
 
-  if (!suggestion) return null
-
-  return (
-    <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[10000] bg-white rounded-xl shadow-2xl border border-whatsapp-light w-[420px] max-w-[90vw]">
-      <div className="flex items-center gap-2 px-4 py-2 border-b bg-whatsapp-light/30">
-        <Sparkles size={14} className="text-whatsapp-secondary" />
-        <span className="text-xs font-medium text-gray-700">
-          Suggested reply for {contactName || "this chat"}
-        </span>
-        <code className="ml-auto text-[10px] text-gray-400 truncate max-w-[120px]">
-          {suggestion.rule.name}
-        </code>
-      </div>
-      <div className="px-4 py-3 text-sm text-gray-800 whitespace-pre-wrap max-h-32 overflow-y-auto">
-        {suggestion.rendered}
-      </div>
-      <div className="flex gap-2 px-4 py-2 border-t bg-gray-50">
-        <button
-          onClick={() => dismiss(true)}
-          className="flex-1 px-3 py-1.5 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-100 transition-colors">
-          Dismiss
-        </button>
-        <button
-          onClick={handleInsert}
-          className="flex-1 px-3 py-1.5 text-sm text-white bg-whatsapp-primary rounded-lg hover:bg-whatsapp-secondary transition-colors">
-          Insert reply
-        </button>
-      </div>
-    </div>
-  )
+  // Renders nothing — this component only hosts the incoming-message observer.
+  return null
 }
 
 // Main content script component

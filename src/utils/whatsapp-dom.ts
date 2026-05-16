@@ -116,6 +116,25 @@ export function replaceInputContent(text: string): boolean {
   return true
 }
 
+// Clear the message box, then insert `text`. Used by auto-send so the sent
+// message is exactly `text` — never appended onto a stale draft or onto a
+// previous auto-reply (which is what produced the "Hi Hi Hi Hi" pile-up).
+export function setMessageInputText(text: string): boolean {
+  const input = getMessageInput()
+  if (!input) {
+    console.log("[WQR/dom] setMessageInputText: input not found")
+    return false
+  }
+  input.focus()
+  // selectAll + a single delete clears reliably — it's repeated consecutive
+  // deletes that WhatsApp's editor batches, not one over a full selection.
+  document.execCommand("selectAll", false)
+  document.execCommand("delete", false)
+  const ok = document.execCommand("insertText", false, text)
+  input.dispatchEvent(new Event("change", { bubbles: true }))
+  return ok
+}
+
 // Get current input text
 export function getCurrentInputText(): string {
   const input = getMessageInput()

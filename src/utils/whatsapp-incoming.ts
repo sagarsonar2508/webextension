@@ -27,15 +27,26 @@ import type { IncomingMessage } from "~/engine/auto-reply"
 export type IncomingHandler = (msg: IncomingMessage) => void
 
 const SEEN_CAP = 5000      // bound the seen-set so long sessions don't leak
-const LOG = "[WQR/obs]"
+const LOG = "[AR/obs]"
+
+// Chat history renders a tick after the chat opens — retry the latest-unread
+// scan until #main is populated before giving up.
+const SCAN_RETRIES = 6
+const SCAN_INTERVAL = 400  // ms between retries
 
 export function startIncomingMessageObserver(
   handler: IncomingHandler
 ): () => void {
   const seenIds = new Set<string>()
   let lastContact = ""
+  // While a chat-switch scan is in progress, the live bubble path is muted —
+  // otherwise the history flood loading in would replay as "new" messages.
+  let suppressLive = false
+  // Set on cleanup so a disconnected observer's pending timeouts go silent
+  // (a stale instance must never fire the handler).
+  let stopped = false
 
-  console.log(`${LOG} observer started`)
+  console.log(`${LOG} start (build: suggest-no-dup)`)
 
   const snapshotHistorySeen = () => {
     document.querySelectorAll<HTMLElement>("#main [data-id]").forEach((el) => {
@@ -49,120 +60,140 @@ export function startIncomingMessageObserver(
     }
   }
 
-  // After snapshotting history as "seen", fire the handler for the most
-  // recent incoming bubble in the open chat. The engine's rate-limit and
-  // per-contact state stop a chat switch from re-firing the same reply.
-  const processLatestIncoming = (contactName: string) => {
-    const mainEl = document.querySelector("#main")
+  // Scan the open chat for the most recent incoming bubble and fire the
+  // handler for it. Retries on an interval because chat history renders
+  // progressively — the bubbles aren't all in the DOM the instant a chat
+  // opens. Once it finds a message (or exhausts retries) it snapshots the
+  // history as "seen" and lifts the live-path suppression. The engine's
+  // rate-limit and per-contact state stop this from re-firing old replies.
+  const processLatestIncoming = (contactName: string, attempt = 0) => {
+    // Aborted: observer disconnected, or the user switched chats again
+    // while this scan was retrying.
+    if (stopped || contactName !== lastContact) return
+
     const bubbles = Array.from(
       document.querySelectorAll<HTMLElement>("#main [data-id]")
     )
-    const summary = { in: 0, out: 0, unknown: 0, withText: 0, noText: 0 }
-    const trace: Array<Record<string, unknown>> = []
+    const sum = { in: 0, out: 0, unknown: 0 }
+    let found: { id: string; text: string; via: DirectionVia } | null = null
+    let viaTrace = ""
 
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i]
-      const id = bubble.getAttribute("data-id") || ""
       const { dir, via } = detectDirection(bubble)
-      const text = extractText(bubble)
-      summary[dir]++
-      if (text) summary.withText++
-      else summary.noText++
-
-      // Capture the first 6 bubbles walked (from newest backward) so we can
-      // see exactly what's in the DOM at chat-switch time.
-      if (trace.length < 6) {
-        const classes = bubble.className?.toString().slice(0, 80) || ""
-        const parentClasses =
-          bubble.parentElement?.className?.toString().slice(0, 80) || ""
-        const rect = bubble.getBoundingClientRect()
-        trace.push({
-          idx: i,
-          id: id.slice(0, 60),
-          dir,
-          via,
-          textLen: text.length,
-          textPreview: text.slice(0, 40),
-          width: Math.round(rect.width),
-          left: Math.round(rect.left),
-          classes,
-          parentClasses
-        })
-      }
-
+      sum[dir]++
+      if (found) continue
+      if (i >= bubbles.length - 4) viaTrace += ` ${dir}/${via}`
       if (dir !== "in") continue
+      const text = extractText(bubble)
       if (!text) continue
-      const safeName = contactName || "there"
-      console.log(`${LOG} latest-unread → handler`, {
-        id,
-        contact: safeName,
-        text: text.slice(0, 80),
-        summary,
-        trace
-      })
-      handler({
-        id: id || `latest_${Date.now()}`,
-        contactId: safeName,
-        contactName: safeName,
+      found = {
+        // Deterministic fallback id (not Date.now()) so the dedup downstream
+        // recognises the same message across repeated scans.
+        id:
+          bubble.getAttribute("data-id") ||
+          `synth:${contactName}:${text.slice(0, 40)}`,
         text,
-        timestamp: Date.now()
-      })
+        via
+      }
+    }
+
+    // History likely still loading — retry quietly before giving up.
+    if (!found && attempt < SCAN_RETRIES) {
+      setTimeout(
+        () => processLatestIncoming(contactName, attempt + 1),
+        SCAN_INTERVAL
+      )
       return
     }
-    console.log(`${LOG} latest-unread: no incoming bubble found`, {
-      contact: contactName,
-      bubblesScanned: bubbles.length,
-      mainExists: !!mainEl,
-      summary,
-      trace
+
+    console.log(
+      `${LOG} scan(try=${attempt}): in=${sum.in} out=${sum.out} unk=${sum.unknown} bubbles=${bubbles.length}`
+    )
+
+    // History is loaded now — mark it seen and re-enable the live path.
+    snapshotHistorySeen()
+    suppressLive = false
+
+    if (!found) {
+      // Geometry of the newest bubble vs #main — pinpoints direction bugs.
+      const main = document.querySelector<HTMLElement>("#main")
+      const last = bubbles[bubbles.length - 1]
+      let geo = "n/a"
+      if (main && last) {
+        const m = main.getBoundingClientRect()
+        const b = last.getBoundingClientRect()
+        geo = `main[L${Math.round(m.left)} R${Math.round(m.right)}] bubble[L${Math.round(b.left)} R${Math.round(b.right)} w${Math.round(b.width)}]`
+      }
+      console.log(
+        `${LOG} latest: no incoming bubble (last4:${viaTrace || " none"}) ${geo}`
+      )
+      return
+    }
+    const safeName = contactName || "there"
+    console.log(
+      `${LOG} latest in → handler: "${found.text.slice(0, 60)}" (via=${found.via})`
+    )
+    handler({
+      id: found.id,
+      contactId: safeName,
+      contactName: safeName,
+      text: found.text,
+      timestamp: Date.now()
     })
   }
 
-  // Initial snapshot, deferred so #main has time to render its history.
+  // Initial scan, deferred so #main has time to start rendering.
   setTimeout(() => {
-    snapshotHistorySeen()
+    if (stopped) return
     lastContact = getContactName()
-    console.log(`${LOG} initial snapshot done`, {
-      contact: lastContact,
-      seen: seenIds.size
-    })
+    suppressLive = true
+    console.log(`${LOG} init: contact="${lastContact}"`)
     processLatestIncoming(lastContact)
   }, 800)
+
+  // Per-burst tally — flushed as one line so a burst is easy to read/share.
+  const burst = { in: 0, out: 0, unknown: 0, notext: 0, seen: 0, supp: 0 }
 
   const tryProcessBubble = (bubble: HTMLElement, contactName: string) => {
     const id = bubble.getAttribute("data-id")
     if (!id) return
-    if (seenIds.has(id)) return
+    // Muted during a chat-switch scan — those bubbles are old history.
+    if (suppressLive) {
+      burst.supp++
+      return
+    }
+    if (seenIds.has(id)) {
+      burst.seen++
+      return
+    }
 
     const { dir, via } = detectDirection(bubble)
     if (dir === "out") {
       seenIds.add(id)
+      burst.out++
       return
     }
     if (dir === "unknown") {
-      // Direction unknown right now (rect may be 0 if not yet laid out).
-      // Don't mark seen — wait for the next mutation tick.
-      console.log(`${LOG} bubble dir=unknown (will retry)`, { id, via })
+      // Direction not resolvable yet (rect 0 / not laid out). Don't mark
+      // seen — the next mutation tick takes another pass.
+      burst.unknown++
       return
     }
 
     const text = extractText(bubble)
     if (!text) {
-      // Text hasn't rendered yet — don't mark seen, let the next mutation
-      // (when the inner content fills in) take another pass.
-      console.log(`${LOG} bubble no-text (will retry)`, { id, via })
+      // Text hasn't rendered yet — let the next mutation pass retry.
+      burst.notext++
       return
     }
 
     seenIds.add(id)
+    burst.in++
     const safeName = contactName || "there"
-    console.log(`${LOG} bubble → handler`, {
-      id,
-      dir,
-      via,
-      contact: safeName,
-      text: text.slice(0, 80)
-    })
+    console.log(
+      `${LOG} bubble in → handler: "${text.slice(0, 60)}" (via=${via})`
+    )
     handler({
       id,
       contactId: safeName,
@@ -176,11 +207,12 @@ export function startIncomingMessageObserver(
   let mutationTick: ReturnType<typeof setTimeout> | null = null
   const flushMutationLog = () => {
     if (addedBubbleCount > 0) {
-      console.log(`${LOG} mutation burst`, {
-        bubblesSeen: addedBubbleCount,
-        contact: lastContact
-      })
+      console.log(
+        `${LOG} mutation burst: ${addedBubbleCount} bubbles | in=${burst.in} out=${burst.out} unk=${burst.unknown} notext=${burst.notext} seen=${burst.seen} supp=${burst.supp}`
+      )
       addedBubbleCount = 0
+      burst.in = burst.out = burst.unknown = 0
+      burst.notext = burst.seen = burst.supp = 0
     }
     mutationTick = null
   }
@@ -188,12 +220,10 @@ export function startIncomingMessageObserver(
   const observer = new MutationObserver((mutations) => {
     const current = getContactName()
     if (current && current !== lastContact) {
-      console.log(`${LOG} chat switch`, { from: lastContact, to: current })
+      console.log(`${LOG} chat switch: "${lastContact}" → "${current}"`)
       lastContact = current
-      setTimeout(() => {
-        snapshotHistorySeen()
-        processLatestIncoming(current)
-      }, 300)
+      suppressLive = true   // mute live path until the scan completes
+      setTimeout(() => processLatestIncoming(current), 300)
       return
     }
 
@@ -234,7 +264,10 @@ export function startIncomingMessageObserver(
     characterData: true
   })
 
-  return () => observer.disconnect()
+  return () => {
+    stopped = true
+    observer.disconnect()
+  }
 }
 
 // ── Direction detection ────────────────────────────────────────────────
@@ -251,7 +284,7 @@ export function startIncomingMessageObserver(
 //      hasn't been laid out yet (rect width is zero).
 
 type Direction = "in" | "out" | "unknown"
-type DirectionVia = "prefix" | "class" | "position" | "none"
+type DirectionVia = "prefix" | "class" | "status" | "position" | "none"
 
 function detectDirection(bubble: HTMLElement): {
   dir: Direction
@@ -264,44 +297,74 @@ function detectDirection(bubble: HTMLElement): {
   if (bubble.closest('[class*="message-out"]')) return { dir: "out", via: "class" }
   if (bubble.closest('[class*="message-in"]')) return { dir: "in", via: "class" }
 
-  // Position-based fallback. Walk up to find a row container (any
-  // ancestor wider than the bubble itself works as the row).
-  let row: HTMLElement | null =
-    bubble.closest<HTMLElement>('[role="row"]') ||
-    bubble.parentElement
-  const bubbleRect = bubble.getBoundingClientRect()
-  while (row && row !== document.body) {
-    const rect = row.getBoundingClientRect()
-    if (rect.width > bubbleRect.width * 1.5 && rect.width > 200) break
-    row = row.parentElement
-  }
+  // Delivery-status icon. Outgoing messages always carry a status icon —
+  // pending clock, sent/delivered/read tick. Incoming messages never do.
+  // `data-icon` is one of WhatsApp's most stable attributes, so this is the
+  // most reliable signal and the one that stops auto-replies from looping on
+  // their own sent message.
+  const hasStatusIcon = Array.from(
+    bubble.querySelectorAll<HTMLElement>("[data-icon]")
+  ).some((el) => {
+    const ic = el.getAttribute("data-icon") || ""
+    return /check|dblcheck|msg-time|status-time/i.test(ic)
+  })
+  if (hasStatusIcon) return { dir: "out", via: "status" }
 
-  if (!row) return { dir: "unknown", via: "none" }
-  const rowRect = row.getBoundingClientRect()
-  if (rowRect.width === 0 || bubbleRect.width === 0) {
+  // Position-based fallback. Incoming bubbles hug the LEFT edge of the
+  // conversation pane, outgoing hug the RIGHT. Measure the bubble's gap to
+  // each edge of #main — a stable, reliably full-width reference frame.
+  // (The old "walk up to any wider ancestor" heuristic could latch onto a
+  // narrow off-centre wrapper and misread every bubble as outgoing.)
+  const main = document.querySelector<HTMLElement>("#main")
+  const bubbleRect = bubble.getBoundingClientRect()
+  if (!main || bubbleRect.width === 0) {
+    return { dir: "unknown", via: "position" }
+  }
+  const mainRect = main.getBoundingClientRect()
+  if (mainRect.width === 0) {
     return { dir: "unknown", via: "position" }
   }
 
-  const bubbleCenter = bubbleRect.left + bubbleRect.width / 2
-  const rowCenter = rowRect.left + rowRect.width / 2
+  const gapLeft = bubbleRect.left - mainRect.left
+  const gapRight = mainRect.right - bubbleRect.right
   return {
-    dir: bubbleCenter > rowCenter ? "out" : "in",
+    dir: gapRight < gapLeft ? "out" : "in",
     via: "position"
   }
 }
 
+// True only if the NEWEST message bubble in the open chat is incoming (from
+// the customer). Auto-send uses this as a hard guard: if the last message in
+// the conversation is one of ours, no reply is sent.
+export function isLastMessageIncoming(): boolean {
+  const bubbles = document.querySelectorAll<HTMLElement>("#main [data-id]")
+  const last = bubbles[bubbles.length - 1]
+  if (!last) return false
+  return detectDirection(last).dir === "in"
+}
+
 // ── Text extraction ────────────────────────────────────────────────────
+
+// WhatsApp renders the message timestamp as a trailing inline element inside
+// the text span (a layout filler so the last line wraps around the clock).
+// It bleeds into innerText/textContent as e.g. "Hi5:50 pm" — strip a trailing
+// clock token so trigger matching sees the real message.
+function stripTimestamp(text: string): string {
+  return text.replace(/\s*\d{1,2}:\d{2}(\s?[ap]\.?m\.?)?\s*$/i, "").trim()
+}
 
 function extractText(bubble: HTMLElement): string {
   const selectable = bubble.querySelector<HTMLElement>(".selectable-text")
   if (selectable) {
-    const txt = (selectable.innerText || selectable.textContent || "").trim()
+    const txt = stripTimestamp(
+      (selectable.innerText || selectable.textContent || "").trim()
+    )
     if (txt) return txt
   }
 
   const copyable = bubble.querySelector<HTMLElement>(".copyable-text")
   if (copyable) {
-    const txt = (copyable.textContent || "").trim()
+    const txt = stripTimestamp((copyable.textContent || "").trim())
     if (txt) return txt
   }
 
@@ -309,7 +372,9 @@ function extractText(bubble: HTMLElement): string {
     'span[dir="ltr"], span[dir="rtl"], span[dir="auto"]'
   )
   if (dirSpan) {
-    const txt = (dirSpan.innerText || dirSpan.textContent || "").trim()
+    const txt = stripTimestamp(
+      (dirSpan.innerText || dirSpan.textContent || "").trim()
+    )
     if (txt) return txt
   }
 

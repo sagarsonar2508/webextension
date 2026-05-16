@@ -28,7 +28,8 @@
       "PowerShell(npx tsc --noEmit; \"exit=$LASTEXITCODE\")",
       "PowerShell(npm run build 2>&1)",
       "Bash(stat -c '%y %n' \"d:\\\\Sagar\\\\WebWha\\\\build\\\\chrome-mv3-prod\\\\whatsapp.9c0e2dd3.js\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\utils\\\\whatsapp-incoming.ts\" 2>/dev/null || ls -la \"d:\\\\Sagar\\\\WebWha\\\\build\\\\chrome-mv3-prod\\\\whatsapp.9c0e2dd3.js\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\contents\\\\whatsapp.tsx\" \"d:\\\\Sagar\\\\WebWha\\\\src\\\\utils\\\\whatsapp-incoming.ts\")",
-      "Read(//d/Sagar/WebWha/**)"
+      "Read(//d/Sagar/WebWha/**)",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('scripts:', json.dumps\\(d.get\\('scripts',{}\\), indent=2\\)\\)\")"
     ],
     "additionalDirectories": [
       "d:\\Sagar\\WebWha"

@@ -4,7 +4,6 @@ import type {
   ConversationState,
   ContactScope,
   KeywordMatch,
-  RateLimit,
   Response,
   Trigger
 } from "~/types"
@@ -31,67 +30,66 @@ export interface MatchResult {
   rendered: string          // response text after variable processing
 }
 
-const LOG = "[WQR/engine]"
+export interface MatchAll {
+  auto: MatchResult[]          // every matching auto-mode rule (one send each)
+  suggest: MatchResult | null  // highest-priority matching suggest-mode rule
+}
 
-// Returns the highest-priority rule whose trigger matches and whose guards
-// (scope, rate limit, master switch) all pass. Pure function — no I/O.
-export function matchRule(input: MatchInput): MatchResult | null {
-  const { message, rules, state, settings, now } = input
-  const enabledCount = rules.filter((r) => r.enabled).length
+const LOG = "[AR/engine]"
+
+// Evaluates every enabled rule against a message.
+//   - Auto-mode: ALL rules whose trigger + scope match are returned, in
+//     priority order — the caller sends one message per rule. No rate-limit
+//     guard; the caller's last-message check + per-message dedup prevent
+//     re-fires (cooldown/daily-cap were dropped for auto-send by design).
+//   - Suggest-mode: the single highest-priority match (one banner), still
+//     gated by the rate limit.
+// Pure function — no I/O.
+export function matchRules(input: MatchInput): MatchAll {
+  const { message, rules, state, settings } = input
+  const empty: MatchAll = { auto: [], suggest: null }
 
   if (!settings.masterEnabled || settings.globalMode === "off") {
-    console.log(`${LOG} blocked: settings off`, {
-      masterEnabled: settings.masterEnabled,
-      globalMode: settings.globalMode
-    })
-    return null
+    console.log(
+      `${LOG} blocked: settings off (master=${settings.masterEnabled} mode=${settings.globalMode})`
+    )
+    return empty
   }
 
-  if (enabledCount === 0) {
-    console.log(`${LOG} blocked: no enabled rules`, { total: rules.length })
-    return null
-  }
-
-  const sorted = [...rules]
+  const enabled = rules
     .filter((r) => r.enabled)
     .sort((a, b) => a.priority - b.priority || a.createdAt - b.createdAt)
 
-  const checks: Array<{
-    rule: string
-    trigger: string
-    trigOK: boolean
-    scopeOK: boolean
-    rateOK: boolean
-  }> = []
-
-  for (const rule of sorted) {
-    const trigOK = triggerMatches(rule.trigger, message, state)
-    const scopeOK = trigOK && scopeAllows(rule.scope, message.contactName)
-    const rateOK = scopeOK && rateLimitAllows(rule.rateLimit, state, rule.id, now)
-    checks.push({
-      rule: rule.name,
-      trigger: rule.trigger.kind,
-      trigOK,
-      scopeOK,
-      rateOK
-    })
-    if (!trigOK || !scopeOK || !rateOK) continue
-
-    const rendered = renderResponse(rule.response, message.contactName)
-    console.log(`${LOG} match`, {
-      rule: rule.name,
-      mode: rule.mode,
-      rendered: rendered.slice(0, 80)
-    })
-    return { rule, rendered }
+  if (enabled.length === 0) {
+    console.log(`${LOG} blocked: no enabled rules (total=${rules.length})`)
+    return empty
   }
 
-  console.log(`${LOG} no match`, {
-    text: message.text.slice(0, 60),
-    enabled: enabledCount,
-    checks
-  })
-  return null
+  const auto: MatchResult[] = []
+  let suggest: MatchResult | null = null
+  const skipped: string[] = []
+
+  for (const rule of enabled) {
+    const trigOK = triggerMatches(rule.trigger, message, state)
+    const scopeOK = trigOK && scopeAllows(rule.scope, message.contactName)
+    if (!trigOK || !scopeOK) {
+      skipped.push(`${rule.name}[trig=${+trigOK} scope=${+scopeOK}]`)
+      continue
+    }
+    const rendered = renderResponse(rule.response, message.contactName)
+    if (rule.mode === "auto") {
+      auto.push({ rule, rendered })
+    } else if (!suggest) {
+      suggest = { rule, rendered }
+    }
+  }
+
+  console.log(
+    `${LOG} matched: auto=[${auto.map((m) => m.rule.name).join(",")}] ` +
+      `suggest=${suggest ? suggest.rule.name : "none"}` +
+      (skipped.length ? ` | skipped: ${skipped.join(" ")}` : "")
+  )
+  return { auto, suggest }
 }
 
 // ── Trigger matching ───────────────────────────────────────────────────
@@ -149,29 +147,6 @@ function scopeAllows(scope: ContactScope, contactName: string): boolean {
     case "exclude":
       return !scope.contactNames.some((n) => name.includes(n.toLowerCase()))
   }
-}
-
-// ── Rate limiting ──────────────────────────────────────────────────────
-// Two guards: per-contact daily cap, and a cooldown that applies to *any*
-// reply for this contact (not just the same rule). The cooldown stops two
-// rules from double-firing on a single message.
-
-function rateLimitAllows(
-  limit: RateLimit,
-  state: ConversationState | null,
-  _ruleId: string,
-  now: number
-): boolean {
-  if (!state) return true
-
-  if (limit.maxPerContactPerDay > 0 && state.repliesToday >= limit.maxPerContactPerDay) {
-    return false
-  }
-  if (limit.cooldownMinutes > 0) {
-    const cooldownMs = limit.cooldownMinutes * 60 * 1000
-    if (now - state.lastReplyAt < cooldownMs) return false
-  }
-  return true
 }
 
 // ── Response rendering ─────────────────────────────────────────────────

@@ -31,9 +31,6 @@ export function AutoReplyRuleForm({
   const [scopeKind, setScopeKind] = useState<ScopeKind>("all")
   const [scopeNames, setScopeNames] = useState("")      // comma-separated
 
-  const [maxPerDay, setMaxPerDay] = useState(1)
-  const [cooldownMin, setCooldownMin] = useState(30)
-
   const [mode, setMode] = useState<ReplyMode>("suggest")
 
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -53,8 +50,6 @@ export function AutoReplyRuleForm({
     if (rule.scope.kind === "include" || rule.scope.kind === "exclude") {
       setScopeNames(rule.scope.contactNames.join(", "))
     }
-    setMaxPerDay(rule.rateLimit.maxPerContactPerDay)
-    setCooldownMin(rule.rateLimit.cooldownMinutes)
     setMode(rule.mode ?? "suggest")
   }, [rule])
 
@@ -77,9 +72,6 @@ export function AutoReplyRuleForm({
     if (scopeKind !== "all" && parseList(scopeNames).length === 0) {
       e.scope = "Add at least one contact name"
     }
-
-    if (maxPerDay < 0) e.maxPerDay = "Must be 0 or more"
-    if (cooldownMin < 0) e.cooldownMin = "Must be 0 or more"
 
     setErrors(e)
     return Object.keys(e).length === 0
@@ -110,7 +102,6 @@ export function AutoReplyRuleForm({
       trigger,
       response: { kind: "text", content: content.trim() },
       scope,
-      rateLimit: { maxPerContactPerDay: maxPerDay, cooldownMinutes: cooldownMin },
       mode
     })
   }
@@ -295,33 +286,6 @@ export function AutoReplyRuleForm({
                 </div>
               </label>
             </div>
-          </Section>
-
-          {/* Rate limit */}
-          <Section title="Limits">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Max per contact / day" error={errors.maxPerDay}>
-                <input
-                  type="number"
-                  min={0}
-                  value={maxPerDay}
-                  onChange={(e) => setMaxPerDay(parseInt(e.target.value) || 0)}
-                  className={inputCls(!!errors.maxPerDay)}
-                />
-              </Field>
-              <Field label="Cooldown (min)" error={errors.cooldownMin}>
-                <input
-                  type="number"
-                  min={0}
-                  value={cooldownMin}
-                  onChange={(e) => setCooldownMin(parseInt(e.target.value) || 0)}
-                  className={inputCls(!!errors.cooldownMin)}
-                />
-              </Field>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              0 = unlimited. Suggestions still respect these limits.
-            </p>
           </Section>
 
           <div className="flex gap-2 pt-2">
