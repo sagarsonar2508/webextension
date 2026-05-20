@@ -46,7 +46,7 @@ export function startIncomingMessageObserver(
   // (a stale instance must never fire the handler).
   let stopped = false
 
-  console.log(`${LOG} start (build: suggest-no-dup)`)
+  console.log(`${LOG} start (build: auto-send-off)`)
 
   const snapshotHistorySeen = () => {
     document.querySelectorAll<HTMLElement>("#main [data-id]").forEach((el) => {

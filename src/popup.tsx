@@ -1,5 +1,13 @@
 import { useEffect, useState } from "react"
-import { Plus, Settings as SettingsIcon, MessageSquare, Sparkles } from "lucide-react"
+import {
+  Plus,
+  Settings as SettingsIcon,
+  MessageSquare,
+  Sparkles,
+  BarChart3,
+  Users,
+  User
+} from "lucide-react"
 import { useTemplateStore } from "~/store"
 import {
   TemplateCard,
@@ -7,14 +15,18 @@ import {
   SearchBar,
   CategoryTabs,
   Settings,
-  AutoReplyRulesList
+  AutoReplyRulesList,
+  Analytics,
+  CrmPanel,
+  AccountPanel,
+  UsageBadge
 } from "~/components"
 import type { Template } from "~/types"
-import { incrementUsageCount } from "~/storage"
+import { registerTemplateUse } from "~/engine/usage"
 
 import "~/styles/globals.css"
 
-type Tab = "templates" | "auto-reply"
+type Tab = "templates" | "auto-reply" | "analytics" | "crm"
 
 function Popup() {
   const {
@@ -39,6 +51,7 @@ function Popup() {
 
   const [showForm, setShowForm] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
+  const [showAccount, setShowAccount] = useState(false)
   const [tab, setTab] = useState<Tab>("templates")
 
   useEffect(() => {
@@ -47,21 +60,20 @@ function Popup() {
   }, [loadTemplates, loadSettings])
 
   const handleInsertTemplate = async (template: Template) => {
-    // Send message to content script to insert template
-    const tabs = await chrome.tabs.query({
-      active: true,
-      currentWindow: true
-    })
+    // Meter the reply against the plan quota before inserting. If the free
+    // limit is spent, surface the account panel instead of inserting.
+    const allowed = await registerTemplateUse(template.id, template.title)
+    if (!allowed) {
+      setShowAccount(true)
+      return
+    }
 
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true })
     if (tabs[0]?.id) {
       chrome.tabs.sendMessage(tabs[0].id, {
         type: "INSERT_TEMPLATE",
-        payload: {
-          content: template.content,
-          templateId: template.id
-        }
+        payload: { content: template.content, templateId: template.id }
       })
-      await incrementUsageCount(template.id)
       window.close()
     }
   }
@@ -105,18 +117,22 @@ function Popup() {
           </div>
           <div className="flex gap-1">
             <button
+              onClick={() => setShowAccount(true)}
+              className="p-2 hover:bg-white/10 rounded-lg transition-colors"
+              title="Account">
+              <User size={18} />
+            </button>
+            <button
               onClick={() => setShowSettings(true)}
               className="p-2 hover:bg-white/10 rounded-lg transition-colors"
-              title="Settings"
-            >
+              title="Settings">
               <SettingsIcon size={18} />
             </button>
             {tab === "templates" && (
               <button
                 onClick={() => setShowForm(true)}
                 className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
-                title="Add template"
-              >
+                title="Add template">
                 <Plus size={18} />
               </button>
             )}
@@ -127,6 +143,9 @@ function Popup() {
           <SearchBar value={searchQuery} onChange={setSearchQuery} />
         )}
       </header>
+
+      {/* Plan + usage strip */}
+      <UsageBadge onManage={() => setShowAccount(true)} />
 
       {/* Top-level tabs */}
       <div className="flex border-b bg-white">
@@ -142,9 +161,21 @@ function Popup() {
           icon={<Sparkles size={14} />}
           label="Auto-reply"
         />
+        <TabButton
+          active={tab === "analytics"}
+          onClick={() => setTab("analytics")}
+          icon={<BarChart3 size={14} />}
+          label="Stats"
+        />
+        <TabButton
+          active={tab === "crm"}
+          onClick={() => setTab("crm")}
+          icon={<Users size={14} />}
+          label="CRM"
+        />
       </div>
 
-      {tab === "templates" ? (
+      {tab === "templates" && (
         <>
           {/* Category Tabs */}
           <div className="p-3 bg-white border-b">
@@ -171,8 +202,7 @@ function Popup() {
                 {!searchQuery && (
                   <button
                     onClick={() => setShowForm(true)}
-                    className="mt-3 text-sm text-whatsapp-primary hover:text-whatsapp-secondary"
-                  >
+                    className="mt-3 text-sm text-whatsapp-primary hover:text-whatsapp-secondary">
                     + Add Template
                   </button>
                 )}
@@ -201,9 +231,11 @@ function Popup() {
             </p>
           </footer>
         </>
-      ) : (
-        <AutoReplyRulesList />
       )}
+
+      {tab === "auto-reply" && <AutoReplyRulesList />}
+      {tab === "analytics" && <Analytics />}
+      {tab === "crm" && <CrmPanel />}
 
       {/* Modals */}
       {showForm && (
@@ -221,6 +253,8 @@ function Popup() {
           onClose={() => setShowSettings(false)}
         />
       )}
+
+      {showAccount && <AccountPanel onClose={() => setShowAccount(false)} />}
     </div>
   )
 }
@@ -239,7 +273,7 @@ function TabButton({
   return (
     <button
       onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+      className={`flex-1 flex items-center justify-center gap-1 py-2.5 text-xs font-medium border-b-2 transition-colors ${
         active
           ? "border-whatsapp-primary text-whatsapp-primary"
           : "border-transparent text-gray-500 hover:text-gray-700"

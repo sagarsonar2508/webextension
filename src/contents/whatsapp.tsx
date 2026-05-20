@@ -7,14 +7,18 @@ import {
   Star,
   ChevronRight
 } from "lucide-react"
-import type { Template } from "~/types"
+import type { Template, AccountData } from "~/types"
+import { DEFAULT_ACCOUNT } from "~/types"
 import {
   getTemplates,
   getFavoriteTemplates,
   searchTemplates,
-  getSettings,
-  incrementUsageCount
+  getSettings
 } from "~/storage"
+import { getAccount, isOverQuota } from "~/storage/account"
+import { registerTemplateUse, registerAutoReply } from "~/engine/usage"
+import { showQuotaToast } from "~/utils/toast"
+import { ContactCard } from "~/components/ContactCard"
 import {
   getMessageInput,
   getContactName,
@@ -47,14 +51,42 @@ export const config: PlasmoCSConfig = {
   all_frames: true
 }
 
+// ── Quota cache ─────────────────────────────────────────────────────────────
+// The slash-command and auto-reply paths must decide whether a reply is
+// allowed *synchronously* (an await can't survive a keydown's preventDefault).
+// So the account is mirrored into a module variable, kept fresh from storage.
+let cachedAccount: AccountData = DEFAULT_ACCOUNT
+
+getAccount()
+  .then((a) => {
+    cachedAccount = a
+  })
+  .catch(() => {})
+
+chrome.storage.onChanged.addListener((changes) => {
+  const entry = changes["wqr-account"]
+  if (entry?.newValue) cachedAccount = entry.newValue as AccountData
+})
+
+// Synchronous gate: true when the free reply quota is spent.
+const quotaBlocked = (): boolean => isOverQuota(cachedAccount)
+
 // Sidebar component injected into WhatsApp Web
 function WhatsAppSidebar() {
   const [isOpen, setIsOpen] = useState(false)
+  const [view, setView] = useState<"templates" | "contact">("templates")
+  const [contactName, setContactName] = useState("")
   const [templates, setTemplates] = useState<Template[]>([])
   const [favorites, setFavorites] = useState<Template[]>([])
   const [searchQuery, setSearchQuery] = useState("")
   const [filteredTemplates, setFilteredTemplates] = useState<Template[]>([])
   const [showButton, setShowButton] = useState(true)
+
+  // Refresh the open chat's contact name whenever the panel opens, so the
+  // CRM card always reflects the conversation the user is looking at.
+  useEffect(() => {
+    if (isOpen) setContactName(getContactName())
+  }, [isOpen])
 
   // Load templates
   const loadTemplates = useCallback(async () => {
@@ -80,16 +112,18 @@ function WhatsAppSidebar() {
     }
   }, [searchQuery, templates])
 
-  // Insert template into chat
+  // Insert template into chat — metered against the plan quota first.
   const handleInsertTemplate = useCallback(async (template: Template) => {
-    const contactName = getContactName()
-    const context = getVariableContext(contactName)
+    const allowed = await registerTemplateUse(template.id, template.title)
+    if (!allowed) {
+      showQuotaToast()
+      setIsOpen(false)
+      return
+    }
+
+    const context = getVariableContext(getContactName())
     const processedContent = processTemplate(template.content, context)
-
-    const success = insertTextIntoInput(processedContent)
-
-    if (success) {
-      await incrementUsageCount(template.id)
+    if (insertTextIntoInput(processedContent)) {
       setIsOpen(false)
     }
   }, [])
@@ -143,20 +177,57 @@ function WhatsAppSidebar() {
             </div>
 
             {/* Search */}
-            <div className="relative">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search templates..."
-                className="w-full pl-9 pr-3 py-2 text-sm text-gray-900 rounded-lg focus:outline-none"
-              />
-            </div>
+            {view === "templates" && (
+              <div className="relative">
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="Search templates..."
+                  className="w-full pl-9 pr-3 py-2 text-sm text-gray-900 rounded-lg focus:outline-none"
+                />
+              </div>
+            )}
           </div>
+
+          {/* View switch: templates vs. the open chat's CRM card */}
+          <div className="flex border-b">
+            <button
+              onClick={() => setView("templates")}
+              className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+                view === "templates"
+                  ? "border-whatsapp-primary text-whatsapp-primary"
+                  : "border-transparent text-gray-500"
+              }`}>
+              Templates
+            </button>
+            <button
+              onClick={() => setView("contact")}
+              className={`flex-1 py-2 text-sm font-medium border-b-2 transition-colors ${
+                view === "contact"
+                  ? "border-whatsapp-primary text-whatsapp-primary"
+                  : "border-transparent text-gray-500"
+              }`}>
+              Contact CRM
+            </button>
+          </div>
+
+          {view === "contact" ? (
+            <div className="flex-1 overflow-y-auto">
+              {contactName ? (
+                <ContactCard name={contactName} />
+              ) : (
+                <p className="p-4 text-sm text-gray-500">
+                  Open a chat to see and edit its lead card.
+                </p>
+              )}
+            </div>
+          ) : (
+          <>
 
           {/* Favorites Section */}
           {!searchQuery && favorites.length > 0 && (
@@ -234,6 +305,8 @@ function WhatsAppSidebar() {
               <code className="bg-gray-200 px-1 rounded">/pricing</code> in chat
             </p>
           </div>
+          </>
+          )}
         </div>
       )}
     </>
@@ -297,6 +370,14 @@ function SlashCommandDropdown() {
 
   const replaceShortcut = useCallback(
     (input: HTMLElement, prefix: string, template: Template) => {
+      // Quota gate — checked synchronously off the cached account so it
+      // can run inside the keydown handler.
+      if (quotaBlocked()) {
+        showQuotaToast()
+        setIsVisible(false)
+        return
+      }
+
       const contactName = getContactName()
       const context = getVariableContext(contactName)
       const processedContent = processTemplate(template.content, context)
@@ -354,9 +435,10 @@ function SlashCommandDropdown() {
       deleteThenContinue(charsToDelete)
 
 
-      // Swallow rejection from chrome.storage when the extension was reloaded
-      // mid-session ("Extension context invalidated") — it's noise, not a bug.
-      incrementUsageCount(template.id).catch(() => {})
+      // Meter + record the reply. Swallow rejection from chrome.storage when
+      // the extension was reloaded mid-session ("Extension context
+      // invalidated") — it's noise, not a bug.
+      registerTemplateUse(template.id, template.title).catch(() => {})
       setIsVisible(false)
     },
     []
@@ -572,12 +654,15 @@ function KeyboardShortcuts() {
 
         if (favorites[index]) {
           e.preventDefault()
+          if (quotaBlocked()) {
+            showQuotaToast()
+            return
+          }
           const template = favorites[index]
-          const contactName = getContactName()
-          const context = getVariableContext(contactName)
+          const context = getVariableContext(getContactName())
           const processedContent = processTemplate(template.content, context)
           insertTextIntoInput(processedContent)
-          await incrementUsageCount(template.id)
+          await registerTemplateUse(template.id, template.title)
         }
       }
     }
@@ -662,6 +747,13 @@ function AutoReplySuggestion() {
         console.log(`${LOG} suggest skipped: already inserted (id=${msg.id})`)
         return
       }
+      // Quota gate — mark the message handled so we toast only once for it.
+      if (quotaBlocked()) {
+        suggestInsertedIds.add(msg.id)
+        console.log(`${LOG} suggest skipped: free quota reached`)
+        showQuotaToast()
+        return
+      }
       // If the box already holds this exact suggestion — e.g. WhatsApp
       // restored it as a draft after a page reload — don't insert it again
       // (that was appending a second copy onto the old draft).
@@ -683,6 +775,7 @@ function AutoReplySuggestion() {
       if (inserted) {
         recordReply(msg.contactId, suggest.rule.id).catch(() => {})
         recordTriggered(suggest.rule.id).catch(() => {})
+        registerAutoReply(suggest.rule.id, suggest.rule.name).catch(() => {})
       }
     }
 
@@ -746,6 +839,7 @@ function AutoReplySuggestion() {
           if (sent) {
             recordReply(msg.contactId, m.rule.id).catch(() => {})
             recordTriggered(m.rule.id).catch(() => {})
+            registerAutoReply(m.rule.id, m.rule.name).catch(() => {})
           }
           setTimeout(sendNext, 900)
         }, 250)

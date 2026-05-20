@@ -2,6 +2,7 @@ import { useState, useEffect } from "react"
 import { X, Info } from "lucide-react"
 import type { AutoReplyRule, KeywordMatch, ContactScope, ReplyMode } from "~/types"
 import { AVAILABLE_VARIABLES, validateVariables } from "~/utils/variables"
+import { AUTO_SEND_ENABLED } from "~/config"
 
 type TriggerKind = "keyword" | "first-message" | "any-message"
 type ScopeKind = ContactScope["kind"]
@@ -247,46 +248,51 @@ export function AutoReplyRuleForm({
             </Field>
           </Section>
 
-          {/* Send mode */}
-          <Section title="Send mode">
-            <div className="space-y-2">
-              <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
-                <input
-                  type="radio"
-                  name="mode"
-                  checked={mode === "suggest"}
-                  onChange={() => setMode("suggest")}
-                  className="mt-0.5"
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-900">
-                    Suggest a reply
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Show a banner with the reply — you click Insert to send.
-                  </p>
-                </div>
-              </label>
-              <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
-                <input
-                  type="radio"
-                  name="mode"
-                  checked={mode === "auto"}
-                  onChange={() => setMode("auto")}
-                  className="mt-0.5"
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-900">
-                    Auto-send instantly
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    Sends the reply without asking. Only works while the chat is
-                    open in WhatsApp Web.
-                  </p>
-                </div>
-              </label>
-            </div>
-          </Section>
+          {/* Send mode — only shown while auto-send is enabled. With it off,
+              every rule is suggest-mode (the reply is drafted into the box for
+              the user to review and send), so this choice is hidden. */}
+          {AUTO_SEND_ENABLED && (
+            <Section title="Send mode">
+              <div className="space-y-2">
+                <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "suggest"}
+                    onChange={() => setMode("suggest")}
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      Suggest a reply
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Drafts the reply into the message box for you to review
+                      and send.
+                    </p>
+                  </div>
+                </label>
+                <label className="flex items-start gap-2 p-2 rounded-lg border border-gray-200 cursor-pointer hover:bg-gray-50">
+                  <input
+                    type="radio"
+                    name="mode"
+                    checked={mode === "auto"}
+                    onChange={() => setMode("auto")}
+                    className="mt-0.5"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      Auto-send instantly
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      Sends the reply automatically. Carries WhatsApp ban risk —
+                      use with care.
+                    </p>
+                  </div>
+                </label>
+              </div>
+            </Section>
+          )}
 
           <div className="flex gap-2 pt-2">
             <button

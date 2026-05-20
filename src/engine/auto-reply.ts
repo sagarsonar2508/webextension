@@ -8,6 +8,7 @@ import type {
   Trigger
 } from "~/types"
 import { processTemplate, getVariableContext } from "~/utils/variables"
+import { AUTO_SEND_ENABLED } from "~/config"
 
 export interface IncomingMessage {
   id: string                // WhatsApp's data-id, used for dedup upstream
@@ -77,9 +78,10 @@ export function matchRules(input: MatchInput): MatchAll {
       continue
     }
     const rendered = renderResponse(rule.response, message.contactName)
-    if (rule.mode === "auto") {
+    if (AUTO_SEND_ENABLED && rule.mode === "auto") {
       auto.push({ rule, rendered })
     } else if (!suggest) {
+      // With auto-send disabled, an "auto" rule is treated as a suggestion.
       suggest = { rule, rendered }
     }
   }

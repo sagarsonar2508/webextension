@@ -3,7 +3,7 @@
   "displayName": "WhatsApp Quick Replies - CRM for Small Business",
   "version": "1.0.0",
   "description": "Quick reply templates, slash commands, and CRM features for WhatsApp Web",
-  "author": "Your Name",
+  "author": "G Sharp Media",
   "scripts": {
     "dev": "plasmo dev",
     "build": "plasmo build",
@@ -30,7 +30,8 @@
   },
   "manifest": {
     "host_permissions": [
-      "https://web.whatsapp.com/*"
+      "https://web.whatsapp.com/*",
+      "http://localhost:3000/*"
     ],
     "permissions": [
       "storage",

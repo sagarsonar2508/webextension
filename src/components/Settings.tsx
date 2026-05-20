@@ -1,6 +1,25 @@
-import { X, Download, Upload } from "lucide-react"
+import { X, Download, Upload, Bug } from "lucide-react"
 import type { UserSettings } from "~/types"
 import { exportData, importData } from "~/storage"
+
+// Opens the user's mail client with a pre-filled bug report — version,
+// browser and a blank "what happened" so support emails arrive with enough
+// context to reproduce. The simplest possible feedback loop.
+function reportBug(): void {
+  const version = chrome.runtime.getManifest().version
+  const subject = `QuickReplies bug report (v${version})`
+  const body =
+    `Extension version: ${version}\n` +
+    `Browser: ${navigator.userAgent}\n` +
+    `Page: ${typeof window !== "undefined" ? window.location.hostname : "popup"}\n\n` +
+    `What happened:\n\n\n` +
+    `What I expected:\n\n\n` +
+    `Steps to reproduce:\n1. \n2. \n3. \n`
+  window.open(
+    `mailto:tech@gsharp.media?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,
+    "_blank"
+  )
+}
 
 interface SettingsProps {
   settings: UserSettings
@@ -146,6 +165,20 @@ export function Settings({ settings, onUpdate, onClose }: SettingsProps) {
                 - Type slash commands in chat
               </p>
             </div>
+          </div>
+
+          {/* Support */}
+          <div className="space-y-2 pt-4 border-t">
+            <h3 className="text-sm font-medium text-gray-700">Support</h3>
+            <button
+              onClick={reportBug}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
+              <Bug size={15} />
+              Report a bug
+            </button>
+            <p className="text-[11px] text-gray-400 text-center">
+              Version {chrome.runtime.getManifest().version}
+            </p>
           </div>
         </div>
 

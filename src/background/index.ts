@@ -1,6 +1,8 @@
 // Background service worker for the extension
 // Handles message passing between popup and content scripts
 
+import { API_BASE_URL } from "~/config"
+
 export {}
 
 chrome.runtime.onInstalled.addListener((details) => {
@@ -21,6 +23,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "OPEN_WHATSAPP") {
     chrome.tabs.create({ url: "https://web.whatsapp.com" })
+    sendResponse({ success: true })
+  }
+
+  // Opened from the in-page "Upgrade to Pro" toast when the free quota runs
+  // out — sends the user to the website to log in / upgrade.
+  if (message.type === "OPEN_UPGRADE") {
+    chrome.tabs.create({ url: `${API_BASE_URL}/login` })
     sendResponse({ success: true })
   }
 

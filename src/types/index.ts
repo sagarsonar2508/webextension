@@ -1,4 +1,7 @@
 export * from "./auto-reply"
+export * from "./account"
+export * from "./analytics"
+export * from "./crm"
 
 // Template Types
 export interface Template {
