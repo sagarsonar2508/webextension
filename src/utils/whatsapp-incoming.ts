@@ -343,6 +343,23 @@ export function isLastMessageIncoming(): boolean {
   return detectDirection(last).dir === "in"
 }
 
+/**
+ * Return the text of the most recent incoming (customer) message in the
+ * open chat — or empty string if there isn't one. Used by the AI-suggest
+ * button as the prompt context.
+ */
+export function getLastIncomingMessageText(): string {
+  const bubbles = Array.from(
+    document.querySelectorAll<HTMLElement>("#main [data-id]")
+  ).reverse()
+  for (const b of bubbles) {
+    if (detectDirection(b).dir !== "in") continue
+    const text = extractText(b)
+    if (text) return text
+  }
+  return ""
+}
+
 // ── Text extraction ────────────────────────────────────────────────────
 
 // WhatsApp renders the message timestamp as a trailing inline element inside

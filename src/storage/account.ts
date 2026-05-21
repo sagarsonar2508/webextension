@@ -75,15 +75,25 @@ export function quotaStatus(acc: AccountData): QuotaStatus {
 
 // ── Metering ───────────────────────────────────────────────────────────────
 
+export interface ReplyMetadata {
+  source?: "template" | "auto_reply" | "ai" | "manual"
+  templateKey?: string
+  templateTitle?: string
+  characterCount?: number
+}
+
 /**
  * Account for one reply. Returns `allowed: false` (without incrementing) when
  * the free quota is exhausted. On success, increments the local counter and —
- * if connected — reports to the server in the background.
+ * if connected — reports to the server with the analytics metadata.
+ *
+ * PRIVACY: `meta` may include the user-chosen template label and the reply's
+ * character count. It MUST NEVER include message text, contact names, phone
+ * numbers, or any chat content. The server stores opaque IDs + counts only.
  */
-export async function meterReply(): Promise<{
-  allowed: boolean
-  account: AccountData
-}> {
+export async function meterReply(
+  meta?: ReplyMetadata
+): Promise<{ allowed: boolean; account: AccountData }> {
   const acc = await getAccount()
 
   if (isOverQuota(acc)) {
@@ -97,11 +107,18 @@ export async function meterReply(): Promise<{
   await setAccount(next)
 
   if (next.token) {
-    void reportUsage(next.token, 1)
+    const now = new Date()
+    void reportUsage(next.token, {
+      count: 1,
+      source: meta?.source || "template",
+      templateKey: meta?.templateKey,
+      templateTitle: meta?.templateTitle,
+      characterCount: meta?.characterCount ?? 0,
+      hourOfDay: now.getHours(),
+      dayOfWeek: now.getDay()
+    })
       .then((snap) => applyServerSnapshot(snap))
       .catch((e) => {
-        // Server says quota is gone — clamp the local counter so the next
-        // local check also blocks, keeping the two sides consistent.
         if (e instanceof ApiError && e.status === 402) {
           void clampToQuota()
         }

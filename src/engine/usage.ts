@@ -5,14 +5,29 @@
 
 import { meterReply } from "~/storage/account"
 import { recordEvent } from "~/storage/analytics"
-import { incrementUsageCount } from "~/storage"
+import { getTemplateById, incrementUsageCount } from "~/storage"
 
 /** A user inserted a saved template. Returns false if blocked by the quota. */
 export async function registerTemplateUse(
   id: string,
   title: string
 ): Promise<boolean> {
-  const { allowed } = await meterReply()
+  // Look up the character count so the server can calculate time saved.
+  // We pass the user-chosen TITLE, never the message body.
+  let chars = 0
+  try {
+    const tpl = await getTemplateById(id)
+    chars = tpl?.content.length ?? 0
+  } catch {
+    /* ignore — analytics is best-effort */
+  }
+
+  const { allowed } = await meterReply({
+    source: "template",
+    templateKey: id,
+    templateTitle: title,
+    characterCount: chars
+  })
   if (!allowed) return false
   await incrementUsageCount(id).catch(() => {})
   await recordEvent("template", id, title).catch(() => {})
@@ -22,10 +37,30 @@ export async function registerTemplateUse(
 /** An auto-reply rule produced a reply. Returns false if blocked by the quota. */
 export async function registerAutoReply(
   ruleId: string,
-  ruleName: string
+  ruleName: string,
+  characterCount = 0
 ): Promise<boolean> {
-  const { allowed } = await meterReply()
+  const { allowed } = await meterReply({
+    source: "auto_reply",
+    templateKey: ruleId,
+    templateTitle: ruleName,
+    characterCount
+  })
   if (!allowed) return false
   await recordEvent("auto-reply", ruleId, ruleName).catch(() => {})
   return true
+}
+
+/** An AI-suggested reply was accepted by the user. */
+export async function registerAiReply(
+  sessionId: string,
+  characterCount: number
+): Promise<boolean> {
+  const { allowed } = await meterReply({
+    source: "ai",
+    templateKey: sessionId,
+    templateTitle: "AI suggestion",
+    characterCount
+  })
+  return allowed
 }

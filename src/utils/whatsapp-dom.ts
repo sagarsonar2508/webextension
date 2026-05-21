@@ -1,41 +1,107 @@
 // WhatsApp Web DOM Utilities
-// These selectors may need updates as WhatsApp changes their DOM
+//
+// WhatsApp updates its DOM regularly — class names rotate, contenteditable
+// attributes shuffle, the send icon's data-icon name changes. Every selector
+// here has a chain of fallbacks: a stable structural anchor (#main, footer,
+// header) followed by ever-broader attribute matches. When all fallbacks fail
+// we surface a `quickreplies:dom-failure` event so the sidebar can show a
+// "we're updating, sit tight" banner instead of silently doing nothing.
 
-// Selectors for WhatsApp Web elements
+import { captureError } from "./telemetry"
+
+// Selectors for WhatsApp Web elements. Ordered: most specific first.
 export const SELECTORS = {
-  // Message input box (contenteditable div)
   messageInput: '[contenteditable="true"][data-tab="10"]',
   messageInputFallback: 'footer [contenteditable="true"]',
+  messageInputFallback2: 'div[role="textbox"][contenteditable="true"]',
 
-  // Contact/Chat header
   chatHeader: "header",
   contactName: "header span[title]",
   contactNameFallback: 'header span[dir="auto"]',
 
-  // Chat container
   chatContainer: "#main",
   chatList: '[aria-label="Chat list"]',
 
-  // Send button
   sendButton: '[data-icon="send"]',
-  sendButtonFallback: 'footer button[aria-label*="Send"]',
+  sendButtonFallback: 'footer button[aria-label*="Send" i]',
+  sendButtonFallback2: 'footer span[data-icon*="send" i]',
 
-  // Side panel
   sidePanel: "#side",
-
-  // Main app container
   appContainer: "#app",
-
-  // Conversation panel
   conversationPanel: "#main > div"
 }
 
-// Get the message input element
-export function getMessageInput(): HTMLElement | null {
+// ── DOM failure signal ────────────────────────────────────────────────────
+// Fires when a core selector returns null in a context where it shouldn't
+// (e.g. we're in a chat but can't find the message input). The sidebar
+// listens and shows a graceful banner instead of breaking silently.
+
+const FAILURE_THROTTLE_MS = 5 * 60 * 1000 // one report per 5 min per kind
+const lastReported = new Map<string, number>()
+
+export type DomFailureKind =
+  | "message_input"
+  | "send_button"
+  | "contact_name"
+  | "chat_container"
+
+function reportDomFailure(kind: DomFailureKind, detail?: string): void {
+  const now = Date.now()
+  const last = lastReported.get(kind) || 0
+  if (now - last < FAILURE_THROTTLE_MS) return
+  lastReported.set(kind, now)
+
+  // Surface to the in-page UI.
+  try {
+    window.dispatchEvent(
+      new CustomEvent("quickreplies:dom-failure", {
+        detail: { kind, detail, at: now }
+      })
+    )
+  } catch {
+    /* ignore */
+  }
+
+  // Surface to Sentry so we know to ship a fix. Never includes message
+  // content — just the selector that failed.
+  captureError(new Error(`WhatsApp DOM selector failed: ${kind}`), {
+    kind,
+    detail,
+    waVersion: detectWhatsAppVersion()
+  })
+}
+
+// Best-effort: WhatsApp exposes its build version in a meta tag.
+function detectWhatsAppVersion(): string | null {
   return (
-    document.querySelector<HTMLElement>(SELECTORS.messageInput) ||
-    document.querySelector<HTMLElement>(SELECTORS.messageInputFallback)
+    document
+      .querySelector('meta[name="x-whatsapp-app-version"]')
+      ?.getAttribute("content") ||
+    document.querySelector("html")?.getAttribute("data-app-version") ||
+    null
   )
+}
+
+// ── Element finders (with fallbacks) ──────────────────────────────────────
+
+function findFirst(selectors: string[]): HTMLElement | null {
+  for (const s of selectors) {
+    const el = document.querySelector<HTMLElement>(s)
+    if (el) return el
+  }
+  return null
+}
+
+export function getMessageInput(): HTMLElement | null {
+  const el = findFirst([
+    SELECTORS.messageInput,
+    SELECTORS.messageInputFallback,
+    SELECTORS.messageInputFallback2
+  ])
+  if (!el && isInChat()) {
+    reportDomFailure("message_input")
+  }
+  return el
 }
 
 // Strings WhatsApp renders inside `header span[title]` that aren't real
@@ -46,7 +112,6 @@ const HEADER_PLACEHOLDERS = [
   "click here for group info"
 ]
 
-// Get the current contact name
 export function getContactName(): string {
   const candidates = document.querySelectorAll<HTMLElement>(
     `${SELECTORS.contactName}, ${SELECTORS.contactNameFallback}`
@@ -57,62 +122,41 @@ export function getContactName(): string {
     if (HEADER_PLACEHOLDERS.includes(raw.toLowerCase())) continue
     return raw
   }
+  // Only report when we're actually in a chat — the contact name is
+  // legitimately empty before the user opens one.
+  if (isInChat() && candidates.length === 0) {
+    reportDomFailure("contact_name")
+  }
   return ""
 }
 
 // Insert text into WhatsApp input
 export function insertTextIntoInput(text: string): boolean {
   const input = getMessageInput()
+  if (!input) return false
 
-  if (!input) {
-    console.warn("WhatsApp Quick Replies: Input not found")
-    return false
-  }
-
-  // Focus the input
   input.focus()
-
-  // Clear existing content if any
-  // input.innerHTML = ""
-
-  // Use execCommand for React-controlled inputs
-  // This is the most reliable method for WhatsApp Web
   const success = document.execCommand("insertText", false, text)
-
   if (!success) {
-    // Fallback: dispatch input events manually
     const inputEvent = new InputEvent("input", {
       bubbles: true,
       cancelable: true,
       inputType: "insertText",
       data: text
     })
-
     input.textContent = (input.textContent || "") + text
     input.dispatchEvent(inputEvent)
   }
-
-  // Trigger change events
-  const changeEvent = new Event("change", { bubbles: true })
-  input.dispatchEvent(changeEvent)
-
+  input.dispatchEvent(new Event("change", { bubbles: true }))
   return true
 }
 
-// Replace entire input content
 export function replaceInputContent(text: string): boolean {
   const input = getMessageInput()
-
-  if (!input) {
-    return false
-  }
-
+  if (!input) return false
   input.focus()
-
-  // Select all and replace
   document.execCommand("selectAll", false)
   document.execCommand("insertText", false, text)
-
   return true
 }
 
@@ -121,10 +165,7 @@ export function replaceInputContent(text: string): boolean {
 // previous auto-reply (which is what produced the "Hi Hi Hi Hi" pile-up).
 export function setMessageInputText(text: string): boolean {
   const input = getMessageInput()
-  if (!input) {
-    console.log("[WQR/dom] setMessageInputText: input not found")
-    return false
-  }
+  if (!input) return false
   input.focus()
   // selectAll + a single delete clears reliably — it's repeated consecutive
   // deletes that WhatsApp's editor batches, not one over a full selection.
@@ -135,25 +176,21 @@ export function setMessageInputText(text: string): boolean {
   return ok
 }
 
-// Get current input text
 export function getCurrentInputText(): string {
   const input = getMessageInput()
   return input?.textContent || ""
 }
 
-// Click WhatsApp's Send button. Used by auto-send rules — keystroke-based
-// Enter dispatch is unreliable in WhatsApp's Lexical editor (the same path
-// that swallowed `delete` calls in replaceShortcut), so we click the real
-// button instead.
+// Click WhatsApp's Send button. Keystroke-based Enter dispatch is unreliable
+// in WhatsApp's Lexical editor, so we click the real button instead.
 export function sendCurrentMessage(): boolean {
-  const primary = document.querySelector<HTMLElement>(SELECTORS.sendButton)
-  const fallback = document.querySelector<HTMLElement>(SELECTORS.sendButtonFallback)
-  const btn = primary || fallback
+  const btn = findFirst([
+    SELECTORS.sendButton,
+    SELECTORS.sendButtonFallback,
+    SELECTORS.sendButtonFallback2
+  ])
   if (!btn) {
-    console.log("[WQR/dom] send button not found", {
-      primary: SELECTORS.sendButton,
-      fallback: SELECTORS.sendButtonFallback
-    })
+    reportDomFailure("send_button")
     return false
   }
   // For [data-icon="send"] we get the SVG/icon, so walk up to the clickable button.
@@ -162,17 +199,14 @@ export function sendCurrentMessage(): boolean {
   return true
 }
 
-// Check if we're in a chat
 export function isInChat(): boolean {
   return document.querySelector(SELECTORS.chatContainer) !== null
 }
 
-// Check if WhatsApp Web is loaded
 export function isWhatsAppLoaded(): boolean {
   return document.querySelector(SELECTORS.appContainer) !== null
 }
 
-// Create and observe DOM mutations
 export function observeDOM(
   callback: (mutations: MutationRecord[]) => void,
   targetSelector?: string
@@ -182,7 +216,6 @@ export function observeDOM(
     : document.body
 
   const observer = new MutationObserver(callback)
-
   if (target) {
     observer.observe(target, {
       childList: true,
@@ -190,11 +223,9 @@ export function observeDOM(
       characterData: true
     })
   }
-
   return observer
 }
 
-// Wait for element to appear
 export function waitForElement(
   selector: string,
   timeout: number = 5000
@@ -205,7 +236,6 @@ export function waitForElement(
       resolve(element)
       return
     }
-
     const observer = new MutationObserver(() => {
       const el = document.querySelector(selector)
       if (el) {
@@ -213,12 +243,7 @@ export function waitForElement(
         resolve(el)
       }
     })
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    })
-
+    observer.observe(document.body, { childList: true, subtree: true })
     setTimeout(() => {
       observer.disconnect()
       resolve(null)
@@ -226,25 +251,14 @@ export function waitForElement(
   })
 }
 
-// Detect slash command in input
 export function detectSlashCommand(text: string): {
   isSlashCommand: boolean
   command: string
   prefix: string
 } {
   const match = text.match(/^(.*)\/(\w*)$/)
-
   if (match) {
-    return {
-      isSlashCommand: true,
-      prefix: match[1],
-      command: match[2]
-    }
+    return { isSlashCommand: true, prefix: match[1], command: match[2] }
   }
-
-  return {
-    isSlashCommand: false,
-    command: "",
-    prefix: ""
-  }
+  return { isSlashCommand: false, command: "", prefix: "" }
 }

@@ -1,8 +1,9 @@
 // Thin client for the QuickReplies website API.
 //
-// Only two things ever cross this boundary: an auth token and reply *counts*.
-// No WhatsApp message text, contact names or chat data — rule matching is
-// 100% local. See the privacy note in the website's lib/db.ts.
+// Only counts and opaque analytics metadata cross this boundary: the
+// template id, the user-chosen title, the character count, the hour/day of
+// the reply. NEVER message content, contact names, or chat data — rule
+// matching is 100% local. See the privacy note in the website's lib/db.ts.
 
 import { API_BASE_URL } from "~/config"
 import type { UsageSnapshot } from "~/types"
@@ -62,13 +63,68 @@ export function fetchUsage(token: string): Promise<UsageSnapshot> {
   return call("/api/usage", token, { method: "GET" })
 }
 
-/** Report `count` metered replies to the server. */
+export interface ReportUsagePayload {
+  count: number
+  source?: "template" | "auto_reply" | "ai" | "manual"
+  templateKey?: string
+  templateTitle?: string
+  characterCount?: number
+  hourOfDay?: number
+  dayOfWeek?: number
+}
+
+/** Report `payload` to the server. Opaque IDs only — never message content. */
 export function reportUsage(
   token: string,
-  count: number
+  payload: ReportUsagePayload
 ): Promise<UsageSnapshot> {
   return call("/api/usage", token, {
     method: "POST",
-    body: JSON.stringify({ count })
+    body: JSON.stringify(payload)
   })
+}
+
+export interface AiSuggestRequest {
+  /** The latest incoming message text. Sent to the server which forwards to
+   *  Anthropic. The server does NOT log this content, only the call count. */
+  message: string
+  /** Optional: contact name to personalize. Pass an empty string to skip. */
+  contactName?: string
+  /** Tone hint: "friendly" | "formal" | "concise" | "warm" */
+  tone?: string
+  /** Optional brand voice / business context (one short sentence). */
+  businessContext?: string
+}
+
+export interface AiSuggestResponse {
+  reply: string
+  aiUsed: number
+  aiLimit: number
+}
+
+export async function aiSuggest(
+  token: string,
+  payload: AiSuggestRequest
+): Promise<AiSuggestResponse> {
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE_URL}/api/ai/suggest`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`
+      },
+      body: JSON.stringify(payload)
+    })
+  } catch {
+    throw new ApiError("network error — could not reach QuickReplies", 0)
+  }
+  if (res.status === 402) {
+    throw new ApiError("AI quota exceeded for this month", 402)
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(body.error || `AI request failed (${res.status})`, res.status)
+  }
+  return (await res.json()) as AiSuggestResponse
 }

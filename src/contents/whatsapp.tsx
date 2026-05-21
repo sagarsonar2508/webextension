@@ -19,6 +19,8 @@ import { getAccount, isOverQuota } from "~/storage/account"
 import { registerTemplateUse, registerAutoReply } from "~/engine/usage"
 import { showQuotaToast } from "~/utils/toast"
 import { ContactCard } from "~/components/ContactCard"
+import { DomFailureBanner } from "~/components/DomFailureBanner"
+import { AiSuggestButton } from "~/components/AiSuggestButton"
 import {
   getMessageInput,
   getContactName,
@@ -228,6 +230,9 @@ function WhatsAppSidebar() {
             </div>
           ) : (
           <>
+
+          {/* AI draft */}
+          <AiSuggestButton onAfterInsert={() => setIsOpen(false)} />
 
           {/* Favorites Section */}
           {!searchQuery && favorites.length > 0 && (
@@ -987,6 +992,7 @@ export default function WhatsAppContentScript() {
 
   return (
     <>
+      <DomFailureBanner />
       <WhatsAppSidebar />
       <SlashCommandDropdown />
       <KeyboardShortcuts />

@@ -2,8 +2,19 @@
 // Handles message passing between popup and content scripts
 
 import { API_BASE_URL } from "~/config"
+import { captureError } from "~/utils/telemetry"
 
 export {}
+
+// Catch anything that escapes a message handler / async callback.
+self.addEventListener("error", (e) =>
+  captureError(e.error || e.message, { phase: "sw-onerror" })
+)
+self.addEventListener("unhandledrejection", (e) =>
+  captureError((e as PromiseRejectionEvent).reason, {
+    phase: "sw-unhandled-rejection"
+  })
+)
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") {

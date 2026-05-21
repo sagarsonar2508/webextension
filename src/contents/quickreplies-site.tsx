@@ -1,5 +1,7 @@
 import type { PlasmoCSConfig } from "plasmo"
 import { connectAccount } from "~/storage/account"
+import { API_BASE_URL } from "~/config"
+import { captureError } from "~/utils/telemetry"
 
 // Runs on the QuickReplies website only. Two responsibilities:
 //
@@ -8,10 +10,19 @@ import { connectAccount } from "~/storage/account"
 //   2. Intercept the click on that button, write the token straight into the
 //      extension's storage, and report success back via a CustomEvent.
 //
-// To enable on production, add the deployed origin to `matches` below AND to
-// `host_permissions` in package.json.
+// The matches array covers BOTH the prod origin (from PLASMO_PUBLIC_API_BASE_URL)
+// and localhost:3000 so the same build works on dev machines and shipped
+// users alike. The origin must also appear in package.json's `host_permissions`.
+const apiOrigin = (() => {
+  try {
+    return new URL(API_BASE_URL).origin
+  } catch {
+    return "http://localhost:3000"
+  }
+})()
+
 export const config: PlasmoCSConfig = {
-  matches: ["http://localhost:3000/*"],
+  matches: [`${apiOrigin}/*`, "http://localhost:3000/*"],
   run_at: "document_start"
 }
 
@@ -22,9 +33,8 @@ try {
     "data-quickreplies-extension",
     chrome.runtime.getManifest().version
   )
-} catch {
-  // documentElement may not exist for a tick on the very earliest fragments —
-  // a no-op here is fine, the click handler still works.
+} catch (e) {
+  captureError(e, { phase: "set-marker" })
 }
 
 // One-click connect. Any element on the page carrying
@@ -44,6 +54,7 @@ document.addEventListener("click", async (e) => {
   } catch (err) {
     ok = false
     error = err instanceof Error ? err.message : String(err)
+    captureError(err, { phase: "connect-account" })
   }
   window.dispatchEvent(
     new CustomEvent("quickreplies:connected", { detail: { ok, error } })
